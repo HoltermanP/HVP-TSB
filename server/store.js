@@ -13,11 +13,18 @@ const SEED_FILE = path.join(DATA_DIR, "seed.json");
 // Schrijfbare opslag voor de bestand-backend: lokaal data/db.json; op Vercel /tmp.
 const WRITABLE_FILE = process.env.VERCEL ? "/tmp/hvp-tsb-db.json" : path.join(DATA_DIR, "db.json");
 
-const USE_PG = !!process.env.DATABASE_URL;
+// Connectiestring kan onder verschillende namen staan (Neon/Vercel-integratie).
+const PG_URL =
+  process.env.DATABASE_URL ||
+  process.env.POSTGRES_URL ||
+  process.env.DATABASE_URL_UNPOOLED ||
+  process.env.POSTGRES_URL_NON_POOLING ||
+  "";
+const USE_PG = !!PG_URL;
 let sql = null;
 if (USE_PG) {
   const { neon } = require("@neondatabase/serverless");
-  sql = neon(process.env.DATABASE_URL);
+  sql = neon(PG_URL);
 }
 
 function uid() {
