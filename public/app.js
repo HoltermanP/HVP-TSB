@@ -1026,105 +1026,325 @@
   /* ==================================================================
      MANAGEMENTRAPPORTAGE
   ================================================================== */
+  var reportState = { projects: null, projSel: {}, roleSel: null, month: "" };
+
   function renderReport() {
     clear(app);
     app.appendChild(el("div", { class: "row" }, [
       el("h1", null, ["Managementrapportage"]),
       el("div", { class: "spacer" }),
+      el("button", { class: "btn", onclick: generateReportDialog }, ["✨ Genereer rapportage (AI)"]),
       el("button", { class: "btn secondary", onclick: importActualsDialog }, ["⬆ Uren importeren"]),
     ]));
     var holder = el("div", { id: "report-holder" }, ["Laden…"]);
     app.appendChild(holder);
 
     api.get("/api/projects/full").then(function (projects) {
-      clear(holder);
-      if (!projects.length) { holder.appendChild(el("div", { class: "empty" }, ["Nog geen projecten."])); return; }
-
-      var perProject = [];
-      var phaseAgg = {}; // sectienaam -> {bedrag, uren}
-      var roleAgg = {}; // rolnaam -> {begroot/werkelijk}
-      var grandBedrag = 0, grandUren = 0, grandActualUren = 0, grandActualBedrag = 0;
-
-      projects.forEach(function (p) {
-        var t = TSB.computeBudget(p);
-        var roleName = {}; var rateByName = {};
-        p.roles.forEach(function (r) { roleName[r.id] = r.name; rateByName[r.name] = r.rate; });
-        // werkelijke uren uit project.actuals
-        var actUren = 0, actBedrag = 0;
-        (p.actuals || []).forEach(function (a) {
-          actUren += a.hours;
-          actBedrag += a.hours * (rateByName[a.role] || 0);
-          if (!roleAgg[a.role]) roleAgg[a.role] = { uren: 0, bedrag: 0, actUren: 0, actBedrag: 0 };
-          roleAgg[a.role].actUren += a.hours;
-          roleAgg[a.role].actBedrag += a.hours * (rateByName[a.role] || 0);
-        });
-        perProject.push({ name: p.name.replace(/^Netuitbreiding 20kV /, ""), bedrag: t.grand.bedrag, uren: t.grand.uren, actUren: actUren, actBedrag: actBedrag });
-        grandBedrag += t.grand.bedrag; grandUren += t.grand.uren;
-        grandActualUren += actUren; grandActualBedrag += actBedrag;
-        t.sections.forEach(function (s) {
-          var sec = p.sections.find(function (x) { return x.id === s.id; });
-          var key = shortPhase(sec) + " – " + (sec.name || "").replace(/\s*\(.*?\)\s*/g, " ").trim();
-          var pk = shortPhase(sec);
-          if (!phaseAgg[pk]) phaseAgg[pk] = { bedrag: 0, uren: 0 };
-          phaseAgg[pk].bedrag += s.bedrag; phaseAgg[pk].uren += s.uren;
-          Object.keys(s.perRole).forEach(function (rid) {
-            var nm = roleName[rid];
-            if (!roleAgg[nm]) roleAgg[nm] = { uren: 0, bedrag: 0, actUren: 0, actBedrag: 0 };
-            roleAgg[nm].bedrag += s.perRole[rid].bedrag;
-            roleAgg[nm].uren += s.perRole[rid].duur;
-          });
-        });
-      });
-
-      var pctBesteed = grandUren > 0 ? Math.round(grandActualUren / grandUren * 100) : 0;
-      // KPI-kaarten
-      var kpis = el("div", { class: "kpi-grid" }, [
-        kpiCard("Projecten", String(projects.length), "actief in begroting"),
-        kpiCard("Totaal begroot", euro(grandBedrag), nf(Math.round(grandUren)) + " uur"),
-        kpiCard("Werkelijk geboekt", nf(Math.round(grandActualUren)) + " u", pctBesteed + "% van begrote uren · " + euro(grandActualBedrag)),
-        kpiCard("Resterend begroot", nf(Math.round(grandUren - grandActualUren)) + " u", "nog te besteden"),
-      ]);
-      holder.appendChild(kpis);
-
-      // Grafiek: bedrag per project
-      var chartsRow = el("div", { class: "report-grid" });
-      perProject.sort(function (a, b) { return b.bedrag - a.bedrag; });
-      chartsRow.appendChild(reportCard("Begroot bedrag per project",
-        hBarChart(perProject.map(function (p, i) { return { label: p.name, value: p.bedrag, color: PALETTE[i % PALETTE.length] }; }), { fmt: euro })));
-
-      // Donut: aandeel per fase (bedrag)
-      var phaseKeys = ["VO", "DO", "UO"].filter(function (k) { return phaseAgg[k]; });
-      var phaseData = phaseKeys.map(function (k) {
-        return { label: k, value: phaseAgg[k].bedrag, sub: nf(Math.round(phaseAgg[k].uren)) + " u",
-          color: { VO: "#1f4e79", DO: "#2e8b57", UO: "#d97706" }[k] };
-      });
-      chartsRow.appendChild(reportCard("Verdeling per fase (bedrag)", donutChart(phaseData, { fmt: euro })));
-      holder.appendChild(chartsRow);
-
-      // Grafiek: begroot vs. werkelijk (uren) per project
-      var bvw = perProject.slice().sort(function (a, b) { return b.uren - a.uren; })
-        .map(function (p) { return { label: p.name, a: p.uren, b: p.actUren }; });
-      holder.appendChild(reportCard("Begroot vs. werkelijk geboekte uren — per project",
-        twoSeriesHBar(bvw, {
-          seriesA: { name: "Begroot", color: "#94a8c4" },
-          seriesB: { name: "Werkelijk", color: "#1f4e79" },
-          fmt: function (v) { return nf(Math.round(v)) + " u"; },
-        })));
-
-      // Twee grafieken naast elkaar: uren per rol + begroot/werkelijk per rol
-      var roleArr = Object.keys(roleAgg).map(function (nm) { return { name: nm, uren: roleAgg[nm].uren, actUren: roleAgg[nm].actUren || 0 }; })
-        .filter(function (r) { return r.uren > 0; })
-        .sort(function (a, b) { return b.uren - a.uren; });
-      var row2 = el("div", { class: "report-grid" });
-      row2.appendChild(reportCard("Begrote uren per rol (alle projecten)",
-        hBarChart(roleArr.map(function (r, i) { return { label: r.name, value: r.uren, color: PALETTE[i % PALETTE.length] }; }), { fmt: function (v) { return nf(Math.round(v)) + " u"; } })));
-      row2.appendChild(reportCard("Begroot vs. werkelijk per rol",
-        twoSeriesHBar(roleArr.map(function (r) { return { label: r.name, a: r.uren, b: r.actUren }; }), {
-          seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" },
-          fmt: function (v) { return nf(Math.round(v)) + " u"; },
-        })));
-      holder.appendChild(row2);
+      reportState.projects = projects;
+      projects.forEach(function (p) { if (reportState.projSel[p.id] === undefined) reportState.projSel[p.id] = true; });
+      drawReportDashboard();
     }).catch(function (e) { clear(holder); holder.appendChild(el("div", { class: "empty" }, [e.message])); });
+  }
+
+  function shortName(n) { return (n || "").replace(/^Netuitbreiding 20kV /, ""); }
+
+  // Verzamel beschikbare maanden (uit geboekte uren + gedateerde fasen).
+  function availableMonths(projects) {
+    var set = {};
+    projects.forEach(function (p) {
+      (p.actuals || []).forEach(function (a) { if (a.period) set[a.period] = true; });
+      (p.sections || []).forEach(function (s) {
+        if (s.startDate && s.endDate) {
+          var d = new Date(s.startDate + "T00:00:00"), e = new Date(s.endDate + "T00:00:00");
+          var c = new Date(d.getFullYear(), d.getMonth(), 1);
+          while (c <= e) { set[c.getFullYear() + "-" + String(c.getMonth() + 1).padStart(2, "0")] = true; c = new Date(c.getFullYear(), c.getMonth() + 1, 1); }
+        }
+      });
+    });
+    return Object.keys(set).sort();
+  }
+  function monthLabelStr(m) {
+    if (!m) return "Volledige looptijd";
+    var nm = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
+    var parts = m.split("-"); return nm[parseInt(parts[1], 10) - 1] + " " + parts[0];
+  }
+
+  function drawReportDashboard() {
+    var holder = document.getElementById("report-holder");
+    if (!holder) return;
+    clear(holder);
+    var projects = reportState.projects || [];
+    if (!projects.length) { holder.appendChild(el("div", { class: "empty" }, ["Nog geen projecten."])); return; }
+
+    // ---- Filterbalk ----
+    var filterCard = el("div", { class: "card" });
+    filterCard.appendChild(el("div", { style: "font-weight:600;margin-bottom:8px" }, ["Filters"]));
+    var projWrap = el("div", { style: "margin-bottom:8px" }, [el("span", { class: "muted", style: "font-size:13px;margin-right:8px;color:var(--muted)" }, ["Projecten:"])]);
+    projects.forEach(function (p) {
+      var cb = el("input", { type: "checkbox" }); cb.checked = reportState.projSel[p.id] !== false;
+      cb.addEventListener("change", function () { reportState.projSel[p.id] = cb.checked; drawReportDashboard(); });
+      projWrap.appendChild(el("label", { style: "margin-right:14px;font-size:13px;cursor:pointer" }, [cb, " " + shortName(p.name)]));
+    });
+    filterCard.appendChild(projWrap);
+
+    var active = projects.filter(function (p) { return reportState.projSel[p.id] !== false; });
+
+    // rollen (functies) over actieve projecten
+    var allRoles = {};
+    active.forEach(function (p) { p.roles.forEach(function (r) { allRoles[r.name] = true; }); });
+    var roleNames = Object.keys(allRoles).sort();
+    var roleSel = el("select", { multiple: "multiple", size: "4", style: "min-width:240px" }, roleNames.map(function (nm) {
+      return el("option", { value: nm, selected: (reportState.roleSel && reportState.roleSel.indexOf(nm) >= 0) ? "selected" : null }, [nm]);
+    }));
+    roleSel.addEventListener("change", function () {
+      var sel = Array.prototype.filter.call(roleSel.options, function (o) { return o.selected; }).map(function (o) { return o.value; });
+      reportState.roleSel = sel.length ? sel : null; drawReportDashboard();
+    });
+    var months = availableMonths(active);
+    var monthSel = el("select", null, [el("option", { value: "" }, ["Volledige looptijd"])].concat(months.map(function (m) {
+      return el("option", { value: m, selected: m === reportState.month ? "selected" : null }, [monthLabelStr(m)]);
+    })));
+    monthSel.addEventListener("change", function () { reportState.month = monthSel.value; drawReportDashboard(); });
+    filterCard.appendChild(el("div", { class: "row" }, [
+      el("label", { class: "field" }, ["Functie (rol) — meerdere mogelijk", roleSel]),
+      el("label", { class: "field" }, ["Periode", monthSel]),
+      reportState.roleSel ? el("button", { class: "btn secondary small", style: "align-self:flex-end", onclick: function () { reportState.roleSel = null; drawReportDashboard(); } }, ["Toon alle rollen"]) : null,
+    ]));
+    holder.appendChild(filterCard);
+
+    // ---- Aggregatie ----
+    var perProject = [], phaseAgg = {}, roleAgg = {};
+    var grandBedrag = 0, grandUren = 0, grandActualUren = 0, grandActualBedrag = 0, monthActualUren = 0, monthActualBedrag = 0;
+    var month = reportState.month;
+    active.forEach(function (p) {
+      var t = TSB.computeBudget(p);
+      var roleName = {}, rateByName = {};
+      p.roles.forEach(function (r) { roleName[r.id] = r.name; rateByName[r.name] = r.rate; });
+      var actUren = 0, actBedrag = 0;
+      (p.actuals || []).forEach(function (a) {
+        actUren += a.hours; var b = a.hours * (rateByName[a.role] || 0); actBedrag += b;
+        if (!roleAgg[a.role]) roleAgg[a.role] = { uren: 0, bedrag: 0, actUren: 0, actBedrag: 0 };
+        roleAgg[a.role].actUren += a.hours; roleAgg[a.role].actBedrag += b;
+        if (month && a.period === month) { monthActualUren += a.hours; monthActualBedrag += b; }
+      });
+      perProject.push({ name: shortName(p.name), bedrag: t.grand.bedrag, uren: t.grand.uren, actUren: actUren });
+      grandBedrag += t.grand.bedrag; grandUren += t.grand.uren; grandActualUren += actUren; grandActualBedrag += actBedrag;
+      t.sections.forEach(function (s) {
+        var sec = p.sections.find(function (x) { return x.id === s.id; });
+        var pk = shortPhase(sec);
+        if (!phaseAgg[pk]) phaseAgg[pk] = { bedrag: 0, uren: 0 };
+        phaseAgg[pk].bedrag += s.bedrag; phaseAgg[pk].uren += s.uren;
+        Object.keys(s.perRole).forEach(function (rid) {
+          var nm = roleName[rid];
+          if (!roleAgg[nm]) roleAgg[nm] = { uren: 0, bedrag: 0, actUren: 0, actBedrag: 0 };
+          roleAgg[nm].bedrag += s.perRole[rid].bedrag; roleAgg[nm].uren += s.perRole[rid].duur;
+        });
+      });
+    });
+
+    var pctBesteed = grandUren > 0 ? Math.round(grandActualUren / grandUren * 100) : 0;
+    holder.appendChild(el("div", { class: "kpi-grid" }, [
+      kpiCard("Projecten", String(active.length), "in selectie"),
+      kpiCard("Totaal begroot", euro(grandBedrag), nf(Math.round(grandUren)) + " uur"),
+      month ? kpiCard("Geboekt in " + monthLabelStr(month), nf(Math.round(monthActualUren)) + " u", euro(monthActualBedrag))
+            : kpiCard("Werkelijk geboekt", nf(Math.round(grandActualUren)) + " u", pctBesteed + "% van begroot · " + euro(grandActualBedrag)),
+      kpiCard("Resterend begroot", nf(Math.round(grandUren - grandActualUren)) + " u", "nog te besteden"),
+    ]));
+
+    var chartsRow = el("div", { class: "report-grid" });
+    perProject.sort(function (a, b) { return b.bedrag - a.bedrag; });
+    chartsRow.appendChild(reportCard("Begroot bedrag per project",
+      hBarChart(perProject.map(function (p, i) { return { label: p.name, value: p.bedrag, color: PALETTE[i % PALETTE.length] }; }), { fmt: euro })));
+    var phaseKeys = ["VO", "DO", "UO"].filter(function (k) { return phaseAgg[k]; });
+    var phaseData = phaseKeys.map(function (k) { return { label: k, value: phaseAgg[k].bedrag, sub: nf(Math.round(phaseAgg[k].uren)) + " u", color: { VO: "#1f4e79", DO: "#2e8b57", UO: "#d97706" }[k] }; });
+    chartsRow.appendChild(reportCard("Verdeling per fase (bedrag)", donutChart(phaseData, { fmt: euro })));
+    holder.appendChild(chartsRow);
+
+    holder.appendChild(reportCard("Begroot vs. werkelijk geboekte uren — per project",
+      twoSeriesHBar(perProject.slice().sort(function (a, b) { return b.uren - a.uren; }).map(function (p) { return { label: p.name, a: p.uren, b: p.actUren }; }),
+        { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#1f4e79" }, fmt: function (v) { return nf(Math.round(v)) + " u"; } })));
+
+    var roleArr = Object.keys(roleAgg).map(function (nm) { return { name: nm, uren: roleAgg[nm].uren, actUren: roleAgg[nm].actUren || 0 }; })
+      .filter(function (r) { return r.uren > 0 && (!reportState.roleSel || reportState.roleSel.indexOf(r.name) >= 0); })
+      .sort(function (a, b) { return b.uren - a.uren; });
+    var row2 = el("div", { class: "report-grid" });
+    row2.appendChild(reportCard("Begrote uren per rol" + (reportState.roleSel ? " (selectie)" : ""),
+      hBarChart(roleArr.map(function (r, i) { return { label: r.name, value: r.uren, color: PALETTE[i % PALETTE.length] }; }), { fmt: function (v) { return nf(Math.round(v)) + " u"; } })));
+    row2.appendChild(reportCard("Begroot vs. werkelijk per rol",
+      twoSeriesHBar(roleArr.map(function (r) { return { label: r.name, a: r.uren, b: r.actUren }; }),
+        { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" }, fmt: function (v) { return nf(Math.round(v)) + " u"; } })));
+    holder.appendChild(row2);
+  }
+
+  /* ----------- AI-rapportage genereren + exporteren ----------- */
+  function generateReportDialog() {
+    var projects = reportState.projects || [];
+    var months = availableMonths(projects.filter(function (p) { return reportState.projSel[p.id] !== false; }));
+    var title = el("input", { value: "Maandrapportage netuitbreiding 20kV", class: "full" });
+    var monthSel = el("select", null, [el("option", { value: "" }, ["Volledige looptijd (alle data)"])].concat(months.map(function (m) {
+      return el("option", { value: m, selected: m === reportState.month ? "selected" : null }, [monthLabelStr(m)]);
+    })));
+    var scope = el("select", null, [
+      el("option", { value: "sel" }, ["Huidige projectselectie"]),
+      el("option", { value: "all" }, ["Alle projecten"]),
+    ]);
+    var m = modal("Rapportage genereren", [
+      el("p", { style: "color:var(--muted);font-size:13px;margin-top:0" }, ["De data wordt door AI geanalyseerd en omgezet in een opgemaakt rapport met tabellen en grafieken (HTML + PDF)."]),
+      el("div", { class: "grid2" }, [
+        el("label", { class: "field full" }, ["Titel", title]),
+        el("label", { class: "field" }, ["Periode", monthSel]),
+        el("label", { class: "field" }, ["Omvang", scope]),
+      ]),
+    ], [
+      el("button", { class: "btn secondary", onclick: function () { m.close(); } }, ["Annuleren"]),
+      el("button", { class: "btn", onclick: function () {
+        var ids = scope.value === "all" ? [] : (reportState.projects || []).filter(function (p) { return reportState.projSel[p.id] !== false; }).map(function (p) { return p.id; });
+        var body = { projectIds: ids, month: monthSel.value || null, title: title.value };
+        m.close();
+        toast("Rapportage wordt gegenereerd…");
+        api.send("POST", "/api/report", body)
+          .then(function (resp) { showGeneratedReport(resp); })
+          .catch(function (e) { toast(e.message, true); });
+      } }, ["Genereren"]),
+    ]);
+  }
+
+  function showGeneratedReport(resp) {
+    var html = buildReportHtml(resp.facts, resp.narrative, resp.aiUsed);
+    clear(app);
+    app.appendChild(el("div", { class: "breadcrumb", onclick: function () { state.view = "report"; render(); } }, ["← Terug naar rapportage"]));
+    app.appendChild(el("div", { class: "row", style: "margin-bottom:10px" }, [
+      el("h1", null, [resp.narrative.titel || "Rapportage"]),
+      el("div", { class: "spacer" }),
+      resp.aiUsed ? el("span", { class: "tag" }, ["AI-analyse"]) : el("span", { class: "tag", style: "background:#fde2b8;color:#92400e" }, ["Zonder AI (stel ANTHROPIC_API_KEY in)"]),
+      el("button", { class: "btn secondary small", onclick: function () { downloadFile(resp.narrative.titel + ".html", html, "text/html"); } }, ["⬇ HTML"]),
+      el("button", { class: "btn small", onclick: function () { printIframe(); } }, ["⬇ PDF / Print"]),
+    ]));
+    var frame = el("iframe", { id: "report-frame", style: "width:100%;height:75vh;border:1px solid var(--border);border-radius:10px;background:#fff" });
+    frame.srcdoc = html;
+    app.appendChild(frame);
+  }
+  function printIframe() {
+    var f = document.getElementById("report-frame");
+    if (f && f.contentWindow) { f.contentWindow.focus(); f.contentWindow.print(); }
+  }
+  function downloadFile(name, content, mime) {
+    var blob = new Blob([content], { type: mime + ";charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = el("a", { href: url, download: (name || "rapport").replace(/[^a-z0-9_\-. ]/gi, "_") });
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+
+  // Mini-markdown -> HTML (alinea's, **vet**, opsommingen).
+  function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  function mdToHtml(text) {
+    var lines = String(text || "").split(/\n/);
+    var out = [], list = null, para = [];
+    function flushPara() { if (para.length) { out.push("<p>" + inline(para.join(" ")) + "</p>"); para = []; } }
+    function flushList() { if (list) { out.push("<ul>" + list.join("") + "</ul>"); list = null; } }
+    function inline(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"); }
+    lines.forEach(function (ln) {
+      var t = ln.trim();
+      if (!t) { flushPara(); flushList(); return; }
+      if (/^[-*]\s+/.test(t)) { flushPara(); if (!list) list = []; list.push("<li>" + inline(t.replace(/^[-*]\s+/, "")) + "</li>"); }
+      else { flushList(); para.push(t); }
+    });
+    flushPara(); flushList();
+    return out.join("\n");
+  }
+  function svgHtml(node) { return node ? node.outerHTML : ""; }
+
+  function buildReportHtml(facts, narrative, aiUsed) {
+    var f = facts, n = narrative;
+    var euroStr = function (v) { return "€ " + (v || 0).toLocaleString("nl-NL"); };
+    var uStr = function (v) { return nf(Math.round(v || 0)) + " u"; };
+
+    // Grafieken (SVG)
+    var projSorted = f.projects.slice().sort(function (a, b) { return b.begrootBedrag - a.begrootBedrag; });
+    var chartBedrag = hBarChart(projSorted.map(function (p, i) { return { label: shortName(p.name), value: p.begrootBedrag, color: PALETTE[i % PALETTE.length] }; }), { fmt: euroStr });
+    var phaseColors = { VO: "#1f4e79", DO: "#2e8b57", UO: "#d97706" };
+    var chartFase = donutChart(f.phases.map(function (p) { return { label: p.key, value: p.bedrag, sub: uStr(p.uren), color: phaseColors[p.key] || "#1f4e79" }; }), { fmt: euroStr });
+    var chartBvw = twoSeriesHBar(projSorted.map(function (p) { return { label: shortName(p.name), a: p.begrootUren, b: p.werkelijkUren }; }),
+      { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#1f4e79" }, fmt: uStr });
+    var rolesSorted = f.roles.slice().sort(function (a, b) { return b.begrootUren - a.begrootUren; });
+    var chartRol = twoSeriesHBar(rolesSorted.map(function (r) { return { label: r.name, a: r.begrootUren, b: r.werkelijkUren }; }),
+      { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" }, fmt: uStr });
+
+    // Tabellen
+    function projTable() {
+      var rows = f.projects.map(function (p) {
+        return "<tr><td>" + esc(p.name) + "</td><td>" + esc(p.client || "") + "</td><td class='r'>" + euroStr(p.begrootBedrag) +
+          "</td><td class='r'>" + uStr(p.begrootUren) + "</td><td class='r'>" + uStr(p.werkelijkUren) + "</td><td class='r'>" + p.pctBesteed + "%</td></tr>";
+      }).join("");
+      return "<table class='rep'><thead><tr><th>Project</th><th>Opdrachtgever</th><th class='r'>Begroot</th><th class='r'>Begrote uren</th><th class='r'>Werkelijk</th><th class='r'>Besteed</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+    function roleTable() {
+      var rows = rolesSorted.map(function (r) {
+        return "<tr><td>" + esc(r.name) + "</td><td class='r'>" + uStr(r.begrootUren) + "</td><td class='r'>" + uStr(r.werkelijkUren) +
+          "</td><td class='r'>" + euroStr(r.begrootBedrag) + "</td></tr>";
+      }).join("");
+      return "<table class='rep'><thead><tr><th>Rol / functie</th><th class='r'>Begrote uren</th><th class='r'>Werkelijke uren</th><th class='r'>Begroot bedrag</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+    function planTable() {
+      if (!f.monthPlanning || !f.monthPlanning.length) return "";
+      var rows = f.monthPlanning.map(function (r) {
+        var u = r.utilization;
+        var col = u == null ? "" : u > 100 ? "background:#f8c9c2" : u > 85 ? "background:#fde2b8" : "background:#d7eccc";
+        return "<tr><td>" + esc(r.role) + "</td><td class='r'>" + uStr(r.plannedUren) + "</td><td class='r'>" + (r.capacityUren != null ? uStr(r.capacityUren) : "—") +
+          "</td><td class='r' style='" + col + "'>" + (u != null ? u + "%" : "—") + "</td></tr>";
+      }).join("");
+      return "<h2>Personeelsbezetting — " + esc(f.periodLabel) + "</h2><table class='rep'><thead><tr><th>Rol</th><th class='r'>Gepland</th><th class='r'>Capaciteit</th><th class='r'>Bezetting</th></tr></thead><tbody>" + rows + "</tbody></table>";
+    }
+
+    var p = f.portfolio;
+    var kpis =
+      kpiHtml("Projecten", String(p.projectCount), "in rapportage") +
+      kpiHtml("Totaal begroot", euroStr(p.begrootBedrag), uStr(p.begrootUren)) +
+      kpiHtml("Werkelijk geboekt", uStr(p.werkelijkUren), p.pctBesteed + "% · " + euroStr(p.werkelijkBedrag)) +
+      (f.period ? kpiHtml("Geboekt deze periode", uStr(p.maandWerkelijkUren), euroStr(p.maandWerkelijkBedrag))
+                : kpiHtml("Resterend begroot", uStr(p.begrootUren - p.werkelijkUren), "nog te besteden"));
+
+    var projAnalyses = (n.projecten || []).map(function (pa) {
+      return "<div class='proj'><h3>" + esc(pa.naam) + "</h3>" + mdToHtml(pa.analyse) + "</div>";
+    }).join("");
+    var risks = (n.risicos || []).map(function (r) { return "<li>" + inlineEsc(r) + "</li>"; }).join("");
+    var recs = (n.aanbevelingen || []).map(function (r) { return "<li>" + inlineEsc(r) + "</li>"; }).join("");
+    function inlineEsc(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"); }
+
+    var genStamp = new Date().toLocaleString("nl-NL");
+    var css = "*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2733;margin:0;padding:32px;max-width:980px;margin:0 auto;line-height:1.5}" +
+      "h1{font-size:26px;color:#1f4e79;margin:0 0 4px}h2{font-size:18px;color:#1f4e79;border-bottom:2px solid #d9e1f2;padding-bottom:4px;margin:28px 0 12px}h3{font-size:15px;margin:14px 0 4px}" +
+      ".sub{color:#6b7785;font-size:13px;margin-bottom:18px}p{margin:0 0 10px}ul{margin:0 0 10px 18px}" +
+      ".kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.kpi{border:1px solid #d8dde3;border-radius:10px;padding:12px}.kpi .t{color:#6b7785;font-size:12px}.kpi .v{font-size:20px;font-weight:700;color:#1f4e79}.kpi .s{color:#6b7785;font-size:11px}" +
+      ".charts{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}.chart{border:1px solid #eee;border-radius:8px;padding:10px}.chart .ct{font-weight:600;margin-bottom:8px;font-size:14px}" +
+      "table.rep{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 16px}table.rep th,table.rep td{border:1px solid #e6eaef;padding:5px 8px;text-align:left}table.rep th{background:#f0f3f7}td.r,th.r{text-align:right}" +
+      ".proj{margin-bottom:10px}.muted{color:#6b7785}.footer{margin-top:30px;color:#6b7785;font-size:11px;border-top:1px solid #e6eaef;padding-top:8px}" +
+      "@media print{body{padding:0}h2{page-break-after:avoid}.proj,table.rep,.chart{page-break-inside:avoid}}";
+
+    return "<!doctype html><html lang='nl'><head><meta charset='utf-8'><title>" + esc(n.titel) + "</title><style>" + css + "</style></head><body>" +
+      "<h1>" + esc(n.titel) + "</h1>" +
+      "<div class='sub'>" + esc(f.periodLabel) + " · gegenereerd op " + esc(genStamp) + (aiUsed ? " · AI-analyse" : " · zonder AI") + "</div>" +
+      "<h2>Managementsamenvatting</h2>" + mdToHtml(n.managementsamenvatting) +
+      "<div class='kpis'>" + kpis + "</div>" +
+      "<h2>Kerncijfers</h2>" + mdToHtml(n.kerncijfers_toelichting) +
+      "<div class='charts'>" +
+        "<div class='chart'><div class='ct'>Begroot bedrag per project</div>" + svgHtml(chartBedrag) + "</div>" +
+        "<div class='chart'><div class='ct'>Verdeling per fase</div>" + svgHtml(chartFase) + "</div>" +
+      "</div>" +
+      "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk geboekte uren — per project</div>" + svgHtml(chartBvw) + "</div>" +
+      "<h2>Projecten</h2>" + projTable() + projAnalyses +
+      "<h2>Inzet per rol</h2>" + roleTable() +
+      "<div class='chart'><div class='ct'>Begroot vs. werkelijk per rol</div>" + svgHtml(chartRol) + "</div>" +
+      "<h2>Personeelsbezetting</h2>" + mdToHtml(n.bezetting_analyse) + planTable() +
+      "<h2>Risico's</h2><ul>" + risks + "</ul>" +
+      "<h2>Aanbevelingen</h2><ul>" + recs + "</ul>" +
+      "<h2>Conclusie</h2>" + mdToHtml(n.conclusie) +
+      "<div class='footer'>HVP-TSB · " + esc(f.periodLabel) + " · " + esc(genStamp) + "</div>" +
+      "</body></html>";
+  }
+  function kpiHtml(t, v, s) {
+    return "<div class='kpi'><div class='t'>" + esc(t) + "</div><div class='v'>" + esc(v) + "</div><div class='s'>" + esc(s || "") + "</div></div>";
   }
 
   function kpiCard(title, value, sub) {

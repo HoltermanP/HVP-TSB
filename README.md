@@ -78,8 +78,22 @@ met prijs `/m` → factor 1000).
 Zonder `DATABASE_URL` toont Vercel de demodata read-only (wijzigingen blijven niet
 bewaard); mét `DATABASE_URL` worden wijzigingen persistent opgeslagen in Neon.
 
+## Managementrapportage (AI)
+
+Onder de tab **Rapportage** kun je filteren op project en functie (rol) en op
+periode (maand). Met **"✨ Genereer rapportage (AI)"** maak je een opgemaakt
+rapport: de cijfers worden berekend en door **Claude** geanalyseerd tot een
+managementrapportage met samenvatting, per-project-analyse, bezetting, risico's
+en aanbevelingen — inclusief tabellen en grafieken. Het rapport is te downloaden
+als **HTML** en als **PDF** (via Print → Opslaan als pdf).
+
+- Zet `ANTHROPIC_API_KEY` om de AI-analyse te activeren (model `claude-opus-4-8`).
+  Zonder deze sleutel wordt een nette rapportage zonder AI-tekst gegenereerd.
+- Op Vercel: voeg `ANTHROPIC_API_KEY` toe als environmentvariabele.
+
 ## Configuratie
 
 - `PORT` – poort van de server (standaard `3000`).
 - `DATABASE_URL` – Neon/Postgres-connectiestring (optioneel; zonder dit draait de
   bestand-backend).
+- `ANTHROPIC_API_KEY` – sleutel voor de AI-rapportage (optioneel).

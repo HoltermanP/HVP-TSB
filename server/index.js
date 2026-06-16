@@ -8,6 +8,7 @@ const express = require("express");
 const store = require("./store");
 const { exportExcel } = require("./export-excel");
 const { exportPdf } = require("./export-pdf");
+const { buildFacts, generateNarrative, fallbackNarrative } = require("./ai-report");
 
 // Start de initialisatie alvast (schema + seed bij lege database).
 store.init().catch((e) => console.error("Init-fout:", e.message));
@@ -99,6 +100,15 @@ app.delete("/api/projects/:id", wrap(async (req, res) => {
   const ok = await store.deleteProject(req.params.id);
   if (!ok) return res.status(404).json({ error: "Project niet gevonden" });
   res.json({ ok: true });
+}));
+
+/* ---------- AI-rapportage ---------- */
+app.post("/api/report", wrap(async (req, res) => {
+  const all = await store.getAllProjects();
+  const settings = await store.getSettings();
+  const facts = buildFacts(all, settings, req.body || {});
+  const narrative = await generateNarrative(facts);
+  res.json({ facts, narrative: narrative || fallbackNarrative(facts), aiUsed: !!narrative });
 }));
 
 /* ---------- Export ---------- */
