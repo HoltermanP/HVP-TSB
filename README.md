@@ -52,6 +52,34 @@ prijs/ehd    = totaalbedrag / (hoeveelheid × prijsfactor)
 De prijsfactor zet de hoeveelheid om naar de prijseenheid (bijv. eenheid `km`
 met prijs `/m` → factor 1000).
 
+## Opslag
+
+- **Lokaal zonder database**: data staat in `data/db.json` (met `data/seed.json` als
+  startdata). Geen configuratie nodig.
+- **Met Neon / Postgres** (aanbevolen voor productie/Vercel): zet de
+  omgevingsvariabele `DATABASE_URL` op de Neon-connectiestring. De app maakt dan
+  automatisch de tabellen `formats`, `projects` en `settings` (JSONB) aan en vult
+  een lege database eenmalig met `data/seed.json`.
+
+### Neon koppelen
+
+1. Maak een database aan op [neon.tech](https://neon.tech) (of via de Neon-integratie
+   in Vercel) en kopieer de **pooled** connectiestring.
+2. Op Vercel: voeg deze toe als project-environmentvariabele `DATABASE_URL`
+   (Settings → Environment Variables) en deploy opnieuw.
+3. Lokaal testen: `export DATABASE_URL="postgres://...neon.tech/...?sslmode=require"`
+   en dan `npm start`.
+4. Database (her)vullen vanuit de seed:
+   `DATABASE_URL="..." node scripts/seed-neon.js` (leegt en vult de tabellen).
+
+## Deploy naar Vercel
+
+`vercel.json` draait de Express-app als serverless functie (`api/index.js`).
+Zonder `DATABASE_URL` toont Vercel de demodata read-only (wijzigingen blijven niet
+bewaard); mét `DATABASE_URL` worden wijzigingen persistent opgeslagen in Neon.
+
 ## Configuratie
 
 - `PORT` – poort van de server (standaard `3000`).
+- `DATABASE_URL` – Neon/Postgres-connectiestring (optioneel; zonder dit draait de
+  bestand-backend).

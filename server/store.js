@@ -1,34 +1,31 @@
 /*
- * Eenvoudige, robuuste JSON-opslag (geen externe database nodig).
- * Data wordt centraal bewaard in data/db.json zodat collega's die op
- * dezelfde server werken hetzelfde format en dezelfde projecten delen.
+ * Opslag voor formats en projecten (als JSONB-documenten).
+ *  - Met DATABASE_URL (Neon / Postgres): persistente opslag in de database.
+ *  - Zonder DATABASE_URL: lokaal bestand data/db.json (met seed.json fallback).
+ * Bij een lege database wordt eenmalig geseed vanuit data/seed.json.
  */
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 
 const DATA_DIR = path.join(__dirname, "..", "data");
-// Gecommitte startdata (read-only beschikbaar, ook op Vercel).
 const SEED_FILE = path.join(DATA_DIR, "seed.json");
-// Schrijfbare opslag: lokaal data/db.json; op Vercel /tmp (filesystem is daar
-// read-only behalve /tmp, en /tmp is wel vluchtig — prima voor een demo).
+// Schrijfbare opslag voor de bestand-backend: lokaal data/db.json; op Vercel /tmp.
 const WRITABLE_FILE = process.env.VERCEL ? "/tmp/hvp-tsb-db.json" : path.join(DATA_DIR, "db.json");
+
+const USE_PG = !!process.env.DATABASE_URL;
+let sql = null;
+if (USE_PG) {
+  const { neon } = require("@neondatabase/serverless");
+  sql = neon(process.env.DATABASE_URL);
+}
 
 function uid() {
   return crypto.randomUUID();
 }
-
 function nowIso() {
   return new Date().toISOString();
 }
-
-function ensureDir() {
-  try {
-    const dir = path.dirname(WRITABLE_FILE);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  } catch (e) { /* read-only FS: negeren */ }
-}
-
 function readJson(file) {
   try {
     return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -36,121 +33,157 @@ function readJson(file) {
     return null;
   }
 }
+function loadSeed() {
+  const data = fs.existsSync(SEED_FILE) ? readJson(SEED_FILE) : null;
+  return data || { formats: [buildSeedFormat()], projects: [], settings: { capacityPerWeek: {} } };
+}
 
-let db = { formats: [], projects: [] };
+/* ---------------- Initialisatie (lazy, één keer per proces) ---------------- */
+let readyPromise = null;
+function ready() {
+  if (!readyPromise) readyPromise = init();
+  return readyPromise;
+}
+async function init() {
+  return USE_PG ? pgInit() : fileInit();
+}
 
-function load() {
+async function pgInit() {
+  await sql`CREATE TABLE IF NOT EXISTS formats  (id text PRIMARY KEY, data jsonb NOT NULL, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now())`;
+  await sql`CREATE TABLE IF NOT EXISTS projects (id text PRIMARY KEY, data jsonb NOT NULL, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now())`;
+  await sql`CREATE TABLE IF NOT EXISTS settings (id text PRIMARY KEY, data jsonb NOT NULL)`;
+  const c = await sql`SELECT count(*)::int AS n FROM formats`;
+  if (c[0].n === 0) {
+    const seed = loadSeed();
+    for (const f of seed.formats || []) {
+      await sql`INSERT INTO formats (id, data) VALUES (${f.id}, ${JSON.stringify(f)}::jsonb) ON CONFLICT (id) DO NOTHING`;
+    }
+    for (const p of seed.projects || []) {
+      await sql`INSERT INTO projects (id, data) VALUES (${p.id}, ${JSON.stringify(p)}::jsonb) ON CONFLICT (id) DO NOTHING`;
+    }
+    const s = seed.settings || { capacityPerWeek: {} };
+    await sql`INSERT INTO settings (id, data) VALUES ('global', ${JSON.stringify(s)}::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data`;
+    console.log("Neon: lege database geseed vanuit seed.json");
+  }
+}
+
+/* ---------------- Bestand-backend (lokaal) ---------------- */
+let db = { formats: [], projects: [], settings: { capacityPerWeek: {} } };
+
+function ensureDir() {
+  try {
+    const dir = path.dirname(WRITABLE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) { /* read-only FS */ }
+}
+function fileInit() {
   ensureDir();
-  // Voorkeur: eerder opgeslagen data; anders de gecommitte seed; anders leeg.
   let data = fs.existsSync(WRITABLE_FILE) ? readJson(WRITABLE_FILE) : null;
   if (!data && fs.existsSync(SEED_FILE)) data = readJson(SEED_FILE);
   db = data || { formats: [], projects: [] };
-
   if (!db.formats) db.formats = [];
   if (!db.projects) db.projects = [];
   if (!db.settings) db.settings = { capacityPerWeek: {} };
   if (!db.settings.capacityPerWeek) db.settings.capacityPerWeek = {};
   if (db.formats.length === 0) {
     db.formats.push(buildSeedFormat());
-    save();
+    fileSave();
   }
 }
-
-/* ---------------- Instellingen ---------------- */
-function getSettings() {
-  return db.settings;
-}
-function updateSettings(data) {
-  db.settings = Object.assign({}, db.settings, data || {});
-  if (!db.settings.capacityPerWeek) db.settings.capacityPerWeek = {};
-  save();
-  return db.settings;
-}
-
-function save() {
+function fileSave() {
   try {
     ensureDir();
     const tmp = WRITABLE_FILE + ".tmp";
     fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-    fs.renameSync(tmp, WRITABLE_FILE); // atomaire vervanging
+    fs.renameSync(tmp, WRITABLE_FILE);
   } catch (e) {
-    // Read-only filesystem (bijv. Vercel): data blijft alleen in geheugen.
     console.warn("Opslaan niet mogelijk (read-only FS), alleen in-memory:", e.message);
   }
 }
 
 /* ---------------- Formats ---------------- */
-
-function listFormats() {
-  return db.formats.map((f) => ({
-    id: f.id,
-    name: f.name,
-    createdAt: f.createdAt,
-    updatedAt: f.updatedAt,
-    roleCount: (f.roles || []).length,
-    sectionCount: (f.sections || []).length,
-  }));
+function summaryFormat(f) {
+  return {
+    id: f.id, name: f.name, createdAt: f.createdAt, updatedAt: f.updatedAt,
+    roleCount: (f.roles || []).length, sectionCount: (f.sections || []).length,
+  };
 }
 
-function getFormat(id) {
+async function listFormats() {
+  await ready();
+  if (USE_PG) { const rows = await sql`SELECT data FROM formats`; return rows.map((r) => summaryFormat(r.data)); }
+  return db.formats.map(summaryFormat);
+}
+
+async function getFormat(id) {
+  await ready();
+  if (USE_PG) { const r = await sql`SELECT data FROM formats WHERE id = ${id}`; return r[0] ? r[0].data : null; }
   return db.formats.find((f) => f.id === id) || null;
 }
 
-function createFormat(data) {
+async function createFormat(data) {
+  await ready();
   const f = normalizeFormat(data || {});
   f.id = uid();
   f.createdAt = nowIso();
   f.updatedAt = f.createdAt;
-  db.formats.push(f);
-  save();
+  if (USE_PG) await sql`INSERT INTO formats (id, data) VALUES (${f.id}, ${JSON.stringify(f)}::jsonb)`;
+  else { db.formats.push(f); fileSave(); }
   return f;
 }
 
-function updateFormat(id, data) {
-  const idx = db.formats.findIndex((f) => f.id === id);
-  if (idx === -1) return null;
+async function updateFormat(id, data) {
+  await ready();
+  const existing = await getFormat(id);
+  if (!existing) return null;
   const f = normalizeFormat(data || {});
   f.id = id;
-  f.createdAt = db.formats[idx].createdAt;
+  f.createdAt = existing.createdAt;
   f.updatedAt = nowIso();
-  db.formats[idx] = f;
-  save();
+  if (USE_PG) await sql`UPDATE formats SET data = ${JSON.stringify(f)}::jsonb, updated_at = now() WHERE id = ${id}`;
+  else { const idx = db.formats.findIndex((x) => x.id === id); db.formats[idx] = f; fileSave(); }
   return f;
 }
 
-function deleteFormat(id) {
+async function deleteFormat(id) {
+  await ready();
+  if (USE_PG) { const r = await sql`DELETE FROM formats WHERE id = ${id} RETURNING id`; return r.length > 0; }
   const before = db.formats.length;
   db.formats = db.formats.filter((f) => f.id !== id);
   const changed = db.formats.length !== before;
-  if (changed) save();
+  if (changed) fileSave();
   return changed;
 }
 
 /* ---------------- Projecten ---------------- */
-
-function listProjects() {
-  return db.projects.map((p) => ({
-    id: p.id,
-    name: p.name,
-    client: p.client,
-    projectNumber: p.projectNumber,
-    date: p.date,
-    formatName: p.formatName,
-    createdAt: p.createdAt,
-    updatedAt: p.updatedAt,
-  }));
+function summaryProject(p) {
+  return {
+    id: p.id, name: p.name, client: p.client, projectNumber: p.projectNumber,
+    date: p.date, formatName: p.formatName, createdAt: p.createdAt, updatedAt: p.updatedAt,
+  };
 }
 
-function getProject(id) {
+async function listProjects() {
+  await ready();
+  if (USE_PG) { const rows = await sql`SELECT data FROM projects`; return rows.map((r) => summaryProject(r.data)); }
+  return db.projects.map(summaryProject);
+}
+
+async function getProject(id) {
+  await ready();
+  if (USE_PG) { const r = await sql`SELECT data FROM projects WHERE id = ${id}`; return r[0] ? r[0].data : null; }
   return db.projects.find((p) => p.id === id) || null;
 }
 
-function getAllProjects() {
+async function getAllProjects() {
+  await ready();
+  if (USE_PG) { const rows = await sql`SELECT data FROM projects`; return rows.map((r) => r.data); }
   return db.projects;
 }
 
-function createProjectFromFormat(formatId, meta) {
-  const fmt = getFormat(formatId);
+async function createProjectFromFormat(formatId, meta) {
+  await ready();
+  const fmt = await getFormat(formatId);
   if (!fmt) return null;
   const clone = JSON.parse(JSON.stringify(fmt));
   const project = {
@@ -170,36 +203,54 @@ function createProjectFromFormat(formatId, meta) {
   // Zorg dat elk item een hoeveelheid heeft.
   (project.sections || []).forEach((s) =>
     (s.groups || []).forEach((g) =>
-      (g.items || []).forEach((it) => {
-        if (it.quantity == null) it.quantity = 0;
-      })
+      (g.items || []).forEach((it) => { if (it.quantity == null) it.quantity = 0; })
     )
   );
-  db.projects.push(project);
-  save();
+  if (USE_PG) await sql`INSERT INTO projects (id, data) VALUES (${project.id}, ${JSON.stringify(project)}::jsonb)`;
+  else { db.projects.push(project); fileSave(); }
   return project;
 }
 
-function updateProject(id, data) {
-  const idx = db.projects.findIndex((p) => p.id === id);
-  if (idx === -1) return null;
-  const existing = db.projects[idx];
-  const merged = Object.assign({}, existing, data, {
-    id,
-    createdAt: existing.createdAt,
-    updatedAt: nowIso(),
-  });
-  db.projects[idx] = merged;
-  save();
+async function updateProject(id, data) {
+  await ready();
+  const existing = await getProject(id);
+  if (!existing) return null;
+  const merged = Object.assign({}, existing, data, { id, createdAt: existing.createdAt, updatedAt: nowIso() });
+  if (USE_PG) await sql`UPDATE projects SET data = ${JSON.stringify(merged)}::jsonb, updated_at = now() WHERE id = ${id}`;
+  else { const idx = db.projects.findIndex((p) => p.id === id); db.projects[idx] = merged; fileSave(); }
   return merged;
 }
 
-function deleteProject(id) {
+async function deleteProject(id) {
+  await ready();
+  if (USE_PG) { const r = await sql`DELETE FROM projects WHERE id = ${id} RETURNING id`; return r.length > 0; }
   const before = db.projects.length;
   db.projects = db.projects.filter((p) => p.id !== id);
   const changed = db.projects.length !== before;
-  if (changed) save();
+  if (changed) fileSave();
   return changed;
+}
+
+/* ---------------- Instellingen ---------------- */
+async function getSettings() {
+  await ready();
+  if (USE_PG) { const r = await sql`SELECT data FROM settings WHERE id = 'global'`; return r[0] ? r[0].data : { capacityPerWeek: {} }; }
+  return db.settings;
+}
+
+async function updateSettings(data) {
+  await ready();
+  if (USE_PG) {
+    const cur = await getSettings();
+    const merged = Object.assign({}, cur, data || {});
+    if (!merged.capacityPerWeek) merged.capacityPerWeek = {};
+    await sql`INSERT INTO settings (id, data) VALUES ('global', ${JSON.stringify(merged)}::jsonb) ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data`;
+    return merged;
+  }
+  db.settings = Object.assign({}, db.settings, data || {});
+  if (!db.settings.capacityPerWeek) db.settings.capacityPerWeek = {};
+  fileSave();
+  return db.settings;
 }
 
 /* ---------------- Normalisatie ---------------- */
@@ -435,8 +486,8 @@ function buildSeedFormat() {
 }
 
 module.exports = {
-  load,
-  save,
+  load: ready,
+  init: ready,
   getSettings,
   updateSettings,
   listFormats,
