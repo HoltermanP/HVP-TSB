@@ -120,7 +120,12 @@ app.get("/api/projects/:id/export.pdf", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`\n  HVP-TSB draait op  http://localhost:${PORT}\n`);
-});
+// Lokaal/als server starten; op Vercel wordt de app als handler geïmporteerd.
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`\n  HVP-TSB draait op  http://localhost:${PORT}\n`);
+  });
+}
+
+module.exports = app;

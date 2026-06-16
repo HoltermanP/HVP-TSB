@@ -8,7 +8,11 @@ const path = require("path");
 const crypto = require("crypto");
 
 const DATA_DIR = path.join(__dirname, "..", "data");
-const DB_FILE = path.join(DATA_DIR, "db.json");
+// Gecommitte startdata (read-only beschikbaar, ook op Vercel).
+const SEED_FILE = path.join(DATA_DIR, "seed.json");
+// Schrijfbare opslag: lokaal data/db.json; op Vercel /tmp (filesystem is daar
+// read-only behalve /tmp, en /tmp is wel vluchtig — prima voor een demo).
+const WRITABLE_FILE = process.env.VERCEL ? "/tmp/hvp-tsb-db.json" : path.join(DATA_DIR, "db.json");
 
 function uid() {
   return crypto.randomUUID();
@@ -19,21 +23,29 @@ function nowIso() {
 }
 
 function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+  try {
+    const dir = path.dirname(WRITABLE_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  } catch (e) { /* read-only FS: negeren */ }
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch (e) {
+    return null;
+  }
 }
 
 let db = { formats: [], projects: [] };
 
 function load() {
   ensureDir();
-  if (fs.existsSync(DB_FILE)) {
-    try {
-      db = JSON.parse(fs.readFileSync(DB_FILE, "utf8"));
-    } catch (e) {
-      console.error("Kon db.json niet lezen, start met lege database:", e.message);
-      db = { formats: [], projects: [] };
-    }
-  }
+  // Voorkeur: eerder opgeslagen data; anders de gecommitte seed; anders leeg.
+  let data = fs.existsSync(WRITABLE_FILE) ? readJson(WRITABLE_FILE) : null;
+  if (!data && fs.existsSync(SEED_FILE)) data = readJson(SEED_FILE);
+  db = data || { formats: [], projects: [] };
+
   if (!db.formats) db.formats = [];
   if (!db.projects) db.projects = [];
   if (!db.settings) db.settings = { capacityPerWeek: {} };
@@ -56,10 +68,15 @@ function updateSettings(data) {
 }
 
 function save() {
-  ensureDir();
-  const tmp = DB_FILE + ".tmp";
-  fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, DB_FILE); // atomaire vervanging
+  try {
+    ensureDir();
+    const tmp = WRITABLE_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
+    fs.renameSync(tmp, WRITABLE_FILE); // atomaire vervanging
+  } catch (e) {
+    // Read-only filesystem (bijv. Vercel): data blijft alleen in geheugen.
+    console.warn("Opslaan niet mogelijk (read-only FS), alleen in-memory:", e.message);
+  }
 }
 
 /* ---------------- Formats ---------------- */
