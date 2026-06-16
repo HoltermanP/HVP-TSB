@@ -1485,9 +1485,9 @@
     var fmt = opts.fmt || function (v) { return nf(v); };
     var A = opts.seriesA || { name: "A", color: "#94a8c4" };
     var B = opts.seriesB || { name: "B", color: "#1f4e79" };
-    var labelW = 200, barH = 11, gapIn = 2, gap = 14, w = 780, padR = 168;
+    var labelW = 232, barH = 12, gapIn = 4, gap = 22, w = 830, padR = 172;
     var groupH = barH * 2 + gapIn;
-    var h = rows.length * (groupH + gap) + 26;
+    var h = rows.length * (groupH + gap) + 30;
     var max = rows.reduce(function (m, d) { return Math.max(m, d.a, d.b); }, 0) || 1;
     var scaleW = w - labelW - padR;
     var kids = [];
@@ -1497,15 +1497,15 @@
     kids.push(svgEl("rect", { x: labelW + 90, y: 0, width: 11, height: 11, rx: 2, fill: B.color }));
     kids.push(svgEl("text", { x: labelW + 106, y: 9, class: "svg-val" }, [B.name]));
     rows.forEach(function (d, i) {
-      var y = 22 + i * (groupH + gap);
+      var y = 26 + i * (groupH + gap);
       var aw = Math.max((d.a / max) * scaleW, d.a > 0 ? 2 : 0);
       var bw = Math.max((d.b / max) * scaleW, d.b > 0 ? 2 : 0);
-      kids.push(svgEl("text", { x: labelW - 8, y: y + groupH / 2 + 4, "text-anchor": "end", class: "svg-lbl" }, [d.label.length > 32 ? d.label.slice(0, 31) + "…" : d.label]));
+      kids.push(svgEl("text", { x: labelW - 10, y: y + groupH / 2 + 4, "text-anchor": "end", class: "svg-lbl" }, [d.label.length > 34 ? d.label.slice(0, 33) + "…" : d.label]));
       kids.push(svgEl("rect", { x: labelW, y: y, width: aw, height: barH, rx: 3, fill: A.color }));
-      kids.push(svgEl("text", { x: labelW + aw + 6, y: y + barH - 1, class: "svg-val" }, [fmt(d.a)]));
+      kids.push(svgEl("text", { x: labelW + aw + 6, y: y + barH - 2, "font-size": "11", class: "svg-val" }, [fmt(d.a)]));
       kids.push(svgEl("rect", { x: labelW, y: y + barH + gapIn, width: bw, height: barH, rx: 3, fill: B.color }));
       var pct = d.a > 0 ? Math.round(d.b / d.a * 100) + "%" : "";
-      kids.push(svgEl("text", { x: labelW + bw + 6, y: y + barH * 2 + gapIn - 1, class: "svg-val" }, [fmt(d.b) + (pct ? "  (" + pct + ")" : "")]));
+      kids.push(svgEl("text", { x: labelW + bw + 6, y: y + groupH - 1, "font-size": "11", class: "svg-val" }, [fmt(d.b) + (pct ? "  (" + pct + ")" : "")]));
     });
     return svgEl("svg", { viewBox: "0 0 " + w + " " + h, width: "100%", height: h, style: "max-width:" + w + "px" }, kids);
   }
