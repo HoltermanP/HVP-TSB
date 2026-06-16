@@ -144,6 +144,23 @@ app.post("/api/report", wrap(async (req, res) => {
   res.json({ facts, markdown: result.markdown, aiUsed: result.aiUsed });
 }));
 
+/* ---------- Opgeslagen rapporten ---------- */
+app.get("/api/reports", wrap(async (req, res) => res.json(await store.listReports())));
+app.get("/api/reports/:id", wrap(async (req, res) => {
+  const r = await store.getReport(req.params.id);
+  if (!r) return res.status(404).json({ error: "Rapport niet gevonden" });
+  res.json(r);
+}));
+app.post("/api/reports", wrap(async (req, res) => {
+  const r = await store.createReport(req.body || {});
+  res.status(201).json(r);
+}));
+app.delete("/api/reports/:id", wrap(async (req, res) => {
+  const ok = await store.deleteReport(req.params.id);
+  if (!ok) return res.status(404).json({ error: "Rapport niet gevonden" });
+  res.json({ ok: true });
+}));
+
 /* ---------- Export ---------- */
 app.get("/api/projects/:id/export.xlsx", wrap(async (req, res) => {
   const p = await store.getProject(req.params.id);

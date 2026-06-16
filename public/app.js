@@ -1036,6 +1036,10 @@
       el("button", { class: "btn", onclick: generateReportDialog }, ["✨ Genereer rapportage (AI)"]),
       el("button", { class: "btn secondary", onclick: importActualsDialog }, ["⬆ Uren importeren"]),
     ]));
+    var savedHolder = el("div");
+    app.appendChild(savedHolder);
+    loadSavedReports(savedHolder);
+
     var holder = el("div", { id: "report-holder" }, ["Laden…"]);
     app.appendChild(holder);
 
@@ -1044,6 +1048,50 @@
       projects.forEach(function (p) { if (reportState.projSel[p.id] === undefined) reportState.projSel[p.id] = true; });
       drawReportDashboard();
     }).catch(function (e) { clear(holder); holder.appendChild(el("div", { class: "empty" }, [e.message])); });
+  }
+
+  function loadSavedReports(container) {
+    api.get("/api/reports").then(function (list) {
+      clear(container);
+      if (!list.length) return;
+      var card = el("div", { class: "card" });
+      card.appendChild(el("div", { style: "font-weight:600;margin-bottom:8px" }, ["Opgeslagen rapporten"]));
+      list.forEach(function (r) {
+        card.appendChild(el("div", { class: "list-item", style: "cursor:default;margin-bottom:8px" }, [
+          el("div", null, [
+            el("div", { class: "title" }, [r.title || "Rapport"]),
+            el("div", { class: "meta" }, [(r.periodLabel || "") + "  ·  " + new Date(r.createdAt).toLocaleString("nl-NL") + (r.aiUsed ? "  ·  AI" : "")]),
+          ]),
+          el("div", { class: "spacer" }),
+          el("button", { class: "btn secondary small", onclick: function () { openSavedReport(r.id); } }, ["Openen"]),
+          el("button", { class: "icon", title: "Verwijderen", onclick: function () {
+            if (!confirm("Rapport verwijderen?")) return;
+            api.send("DELETE", "/api/reports/" + r.id).then(function () { toast("Verwijderd"); loadSavedReports(container); }).catch(function (e) { toast(e.message, true); });
+          } }, ["🗑"]),
+        ]));
+      });
+      container.appendChild(card);
+    }).catch(function () { /* stil */ });
+  }
+
+  function openSavedReport(id) {
+    api.get("/api/reports/" + id).then(function (report) { openReportDoc(report); }).catch(function (e) { toast(e.message, true); });
+  }
+
+  function openReportDoc(report) {
+    state.view = "report"; setActiveNav("report"); clear(app);
+    app.appendChild(el("div", { class: "breadcrumb", onclick: function () { renderReport(); } }, ["← Terug naar rapportage"]));
+    var html = buildReportHtml(report.facts, report.markdown, report.aiUsed);
+    app.appendChild(el("div", { class: "row", style: "margin-bottom:10px" }, [
+      el("h1", null, [report.title || "Rapport"]),
+      el("div", { class: "spacer" }),
+      report.aiUsed ? el("span", { class: "tag" }, ["AI-analyse"]) : el("span", { class: "tag", style: "background:#fde2b8;color:#92400e" }, ["zonder AI"]),
+      el("button", { class: "btn secondary small", onclick: function () { downloadFile((report.title || "rapport") + ".html", html, "text/html"); } }, ["⬇ HTML"]),
+      el("button", { class: "btn secondary small", onclick: function () { var f = document.getElementById("saved-frame"); if (f && f.contentWindow) { f.contentWindow.focus(); f.contentWindow.print(); } } }, ["⬇ PDF / Print"]),
+    ]));
+    var frame = el("iframe", { id: "saved-frame", style: "width:100%;height:78vh;border:1px solid var(--border);border-radius:10px;background:#fff" });
+    frame.srcdoc = html;
+    app.appendChild(frame);
   }
 
   function shortName(n) { return (n || "").replace(/^Netuitbreiding 20kV /, ""); }
@@ -1254,11 +1302,12 @@
     app.appendChild(el("div", { class: "breadcrumb", onclick: function () { renderReport(); } }, ["← Terug naar rapportage"]));
 
     var badge = el("span", { class: "tag" }, ["bezig…"]);
+    var saveBtn = el("button", { class: "btn small", disabled: "disabled" }, ["💾 Opslaan"]);
     var dlHtml = el("button", { class: "btn secondary small", disabled: "disabled" }, ["⬇ HTML"]);
-    var dlPdf = el("button", { class: "btn small", disabled: "disabled" }, ["⬇ PDF / Print"]);
+    var dlPdf = el("button", { class: "btn secondary small", disabled: "disabled" }, ["⬇ PDF / Print"]);
     app.appendChild(el("div", { class: "row", style: "margin-bottom:10px" }, [
       el("h1", null, [body.title || "Rapportage"]),
-      el("div", { class: "spacer" }), badge, dlHtml, dlPdf,
+      el("div", { class: "spacer" }), badge, saveBtn, dlHtml, dlPdf,
     ]));
 
     // Indeling: KPI's bovenaan, dan de AI-analyse (direct zichtbaar), dan de grafieken.
@@ -1280,9 +1329,15 @@
       var html = buildReportHtml(facts, md, aiUsed);
       var frame = el("iframe", { id: "report-frame", style: "display:none" });
       frame.srcdoc = html; document.body.appendChild(frame);
-      dlHtml.disabled = false; dlPdf.disabled = false;
+      dlHtml.disabled = false; dlPdf.disabled = false; saveBtn.disabled = false;
       dlHtml.onclick = function () { downloadFile((body.title || "rapport") + ".html", html, "text/html"); };
       dlPdf.onclick = function () { var f = document.getElementById("report-frame"); if (f && f.contentWindow) { f.contentWindow.focus(); f.contentWindow.print(); } };
+      saveBtn.onclick = function () {
+        saveBtn.disabled = true;
+        api.send("POST", "/api/reports", { title: body.title || "Rapportage", period: facts.period || null, periodLabel: facts.periodLabel, facts: facts, markdown: md, aiUsed: aiUsed })
+          .then(function () { toast("Rapport opgeslagen"); saveBtn.textContent = "✓ Opgeslagen"; })
+          .catch(function (e) { toast(e.message, true); saveBtn.disabled = false; });
+      };
     }
 
     streamReport(body,

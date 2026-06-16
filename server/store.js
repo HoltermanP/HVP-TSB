@@ -59,6 +59,7 @@ async function pgInit() {
   await sql`CREATE TABLE IF NOT EXISTS formats  (id text PRIMARY KEY, data jsonb NOT NULL, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now())`;
   await sql`CREATE TABLE IF NOT EXISTS projects (id text PRIMARY KEY, data jsonb NOT NULL, created_at timestamptz DEFAULT now(), updated_at timestamptz DEFAULT now())`;
   await sql`CREATE TABLE IF NOT EXISTS settings (id text PRIMARY KEY, data jsonb NOT NULL)`;
+  await sql`CREATE TABLE IF NOT EXISTS reports  (id text PRIMARY KEY, data jsonb NOT NULL, created_at timestamptz DEFAULT now())`;
   const c = await sql`SELECT count(*)::int AS n FROM formats`;
   if (c[0].n === 0) {
     const seed = loadSeed();
@@ -90,6 +91,7 @@ function fileInit() {
   db = data || { formats: [], projects: [] };
   if (!db.formats) db.formats = [];
   if (!db.projects) db.projects = [];
+  if (!db.reports) db.reports = [];
   if (!db.settings) db.settings = { capacityPerWeek: {} };
   if (!db.settings.capacityPerWeek) db.settings.capacityPerWeek = {};
   if (db.formats.length === 0) {
@@ -234,6 +236,37 @@ async function deleteProject(id) {
   const before = db.projects.length;
   db.projects = db.projects.filter((p) => p.id !== id);
   const changed = db.projects.length !== before;
+  if (changed) fileSave();
+  return changed;
+}
+
+/* ---------------- Opgeslagen rapporten ---------------- */
+function summaryReport(r) {
+  return { id: r.id, title: r.title, periodLabel: r.periodLabel, aiUsed: r.aiUsed, createdAt: r.createdAt };
+}
+async function listReports() {
+  await ready();
+  if (USE_PG) { const rows = await sql`SELECT data FROM reports ORDER BY created_at DESC`; return rows.map((r) => summaryReport(r.data)); }
+  return (db.reports || []).slice().sort(function (a, b) { return (a.createdAt < b.createdAt ? 1 : -1); }).map(summaryReport);
+}
+async function getReport(id) {
+  await ready();
+  if (USE_PG) { const r = await sql`SELECT data FROM reports WHERE id = ${id}`; return r[0] ? r[0].data : null; }
+  return (db.reports || []).find((r) => r.id === id) || null;
+}
+async function createReport(data) {
+  await ready();
+  const r = Object.assign({}, data || {}, { id: uid(), createdAt: nowIso() });
+  if (USE_PG) await sql`INSERT INTO reports (id, data) VALUES (${r.id}, ${JSON.stringify(r)}::jsonb)`;
+  else { if (!db.reports) db.reports = []; db.reports.push(r); fileSave(); }
+  return r;
+}
+async function deleteReport(id) {
+  await ready();
+  if (USE_PG) { const r = await sql`DELETE FROM reports WHERE id = ${id} RETURNING id`; return r.length > 0; }
+  const before = (db.reports || []).length;
+  db.reports = (db.reports || []).filter((r) => r.id !== id);
+  const changed = db.reports.length !== before;
   if (changed) fileSave();
   return changed;
 }
@@ -497,6 +530,10 @@ module.exports = {
   init: ready,
   getSettings,
   updateSettings,
+  listReports,
+  getReport,
+  createReport,
+  deleteReport,
   listFormats,
   getFormat,
   createFormat,
