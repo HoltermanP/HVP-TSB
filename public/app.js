@@ -1262,7 +1262,8 @@
     ]));
 
     var dash = el("div");
-    var live = el("div", { class: "md-report" }, [el("span", { style: "color:var(--muted)" }, ["AI-analyse wordt geschreven…"])]);
+    var loader = el("div", { class: "ai-loading" }, [el("span", { class: "hourglass" }, ["⏳"]), el("span", null, ["AI-analyse wordt voorbereid…"])]);
+    var live = el("div", { class: "md-report" }, [loader]);
     app.appendChild(dash);
     app.appendChild(el("div", { class: "card" }, [el("div", { style: "font-weight:600;margin-bottom:8px" }, ["AI-analyse"]), live]));
 
@@ -1312,6 +1313,15 @@
     wrap.appendChild(reportCard("Begroot vs. werkelijk geboekte uren — per project",
       twoSeriesHBar(projSorted.map(function (pr) { return { label: shortName(pr.name), a: pr.begrootUren, b: pr.werkelijkUren }; }),
         { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#1f4e79" }, fmt: uStr })));
+    var rolesSorted = f.roles.slice().sort(function (a, b) { return b.begrootUren - a.begrootUren; });
+    wrap.appendChild(reportCard("Begroot vs. werkelijk per rol",
+      twoSeriesHBar(rolesSorted.map(function (r) { return { label: r.name, a: r.begrootUren, b: r.werkelijkUren }; }),
+        { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" }, fmt: uStr })));
+    // tabellen (zelfde HTML als in de download)
+    var tables = el("div", { class: "card" });
+    tables.innerHTML = "<div style='font-weight:600;margin-bottom:10px'>Onderbouwende cijfers</div><h3>Projecten</h3>" + projTableHtml(f) +
+      "<h3>Inzet per rol</h3>" + roleTableHtml(f) + planTableHtml(f);
+    wrap.appendChild(tables);
     return wrap;
   }
   function downloadFile(name, content, mime) {
@@ -1326,22 +1336,60 @@
   function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
   function mdToHtml(text) {
     var lines = String(text || "").split(/\n/);
-    var out = [], list = null, para = [];
+    var out = [], i = 0, list = null, para = [];
     function flushPara() { if (para.length) { out.push("<p>" + inline(para.join(" ")) + "</p>"); para = []; } }
     function flushList() { if (list) { out.push("<ul>" + list.join("") + "</ul>"); list = null; } }
-    function inline(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"); }
-    lines.forEach(function (ln) {
-      var t = ln.trim();
-      if (!t) { flushPara(); flushList(); return; }
+    function inline(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/`(.+?)`/g, "<code>$1</code>"); }
+    function cells(line) { return line.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(function (c) { return c.trim(); }); }
+    while (i < lines.length) {
+      var t = lines[i].trim();
+      if (!t) { flushPara(); flushList(); i++; continue; }
+      // Markdown-tabel: koprij + scheidingsrij (|---|---|) + body
+      if (/^\|.*\|$/.test(t) && i + 1 < lines.length && /^\|[\s:|-]+\|$/.test(lines[i + 1].trim())) {
+        flushPara(); flushList();
+        var header = cells(t); i += 2; var body = [];
+        while (i < lines.length && /^\|.*\|$/.test(lines[i].trim())) { body.push(cells(lines[i].trim())); i++; }
+        out.push("<table class='rep'><thead><tr>" + header.map(function (h) { return "<th>" + inline(h) + "</th>"; }).join("") + "</tr></thead><tbody>" +
+          body.map(function (r) { return "<tr>" + r.map(function (c) { return "<td>" + inline(c) + "</td>"; }).join("") + "</tr>"; }).join("") + "</tbody></table>");
+        continue;
+      }
       var h = t.match(/^(#{1,4})\s+(.*)$/);
-      if (h) { flushPara(); flushList(); var lvl = Math.min(h[1].length + 1, 4); out.push("<h" + lvl + ">" + inline(h[2]) + "</h" + lvl + ">"); return; }
-      if (/^[-*]\s+/.test(t)) { flushPara(); if (!list) list = []; list.push("<li>" + inline(t.replace(/^[-*]\s+/, "")) + "</li>"); }
-      else { flushList(); para.push(t); }
-    });
+      if (h) { flushPara(); flushList(); var lvl = Math.min(h[1].length + 1, 4); out.push("<h" + lvl + ">" + inline(h[2]) + "</h" + lvl + ">"); i++; continue; }
+      if (/^[-*]\s+/.test(t)) { flushPara(); if (!list) list = []; list.push("<li>" + inline(t.replace(/^[-*]\s+/, "")) + "</li>"); i++; continue; }
+      flushList(); para.push(t); i++;
+    }
     flushPara(); flushList();
     return out.join("\n");
   }
   function svgHtml(node) { return node ? node.outerHTML : ""; }
+
+  // Herbruikbare tabel-HTML (live-weergave én download).
+  function rEuro(v) { return "€ " + (v || 0).toLocaleString("nl-NL"); }
+  function rUur(v) { return nf(Math.round(v || 0)) + " u"; }
+  function projTableHtml(f) {
+    var rows = f.projects.map(function (p) {
+      return "<tr><td>" + esc(p.name) + "</td><td>" + esc(p.client || "") + "</td><td class='r'>" + rEuro(p.begrootBedrag) +
+        "</td><td class='r'>" + rUur(p.begrootUren) + "</td><td class='r'>" + rUur(p.werkelijkUren) + "</td><td class='r'>" + p.pctBesteed + "%</td></tr>";
+    }).join("");
+    return "<table class='rep'><thead><tr><th>Project</th><th>Opdrachtgever</th><th class='r'>Begroot</th><th class='r'>Begrote uren</th><th class='r'>Werkelijk</th><th class='r'>Besteed</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  }
+  function roleTableHtml(f) {
+    var rows = f.roles.slice().sort(function (a, b) { return b.begrootUren - a.begrootUren; }).map(function (r) {
+      return "<tr><td>" + esc(r.name) + "</td><td class='r'>" + rUur(r.begrootUren) + "</td><td class='r'>" + rUur(r.werkelijkUren) +
+        "</td><td class='r'>" + rEuro(r.begrootBedrag) + "</td></tr>";
+    }).join("");
+    return "<table class='rep'><thead><tr><th>Rol / functie</th><th class='r'>Begrote uren</th><th class='r'>Werkelijke uren</th><th class='r'>Begroot bedrag</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  }
+  function planTableHtml(f) {
+    if (!f.monthPlanning || !f.monthPlanning.length) return "";
+    var rows = f.monthPlanning.map(function (r) {
+      var u = r.utilization;
+      var col = u == null ? "" : u > 100 ? "background:#f8c9c2" : u > 85 ? "background:#fde2b8" : "background:#d7eccc";
+      return "<tr><td>" + esc(r.role) + "</td><td class='r'>" + rUur(r.plannedUren) + "</td><td class='r'>" + (r.capacityUren != null ? rUur(r.capacityUren) : "—") +
+        "</td><td class='r' style='" + col + "'>" + (u != null ? u + "%" : "—") + "</td></tr>";
+    }).join("");
+    return "<h3>Bezetting per rol — " + esc(f.periodLabel) + "</h3><table class='rep'><thead><tr><th>Rol</th><th class='r'>Gepland</th><th class='r'>Capaciteit</th><th class='r'>Bezetting</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  }
 
   function buildReportHtml(facts, markdown, aiUsed) {
     var f = facts;
@@ -1357,31 +1405,6 @@
     var rolesSorted = f.roles.slice().sort(function (a, b) { return b.begrootUren - a.begrootUren; });
     var chartRol = twoSeriesHBar(rolesSorted.map(function (r) { return { label: r.name, a: r.begrootUren, b: r.werkelijkUren }; }),
       { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" }, fmt: uStr });
-
-    function projTable() {
-      var rows = f.projects.map(function (p) {
-        return "<tr><td>" + esc(p.name) + "</td><td>" + esc(p.client || "") + "</td><td class='r'>" + euroStr(p.begrootBedrag) +
-          "</td><td class='r'>" + uStr(p.begrootUren) + "</td><td class='r'>" + uStr(p.werkelijkUren) + "</td><td class='r'>" + p.pctBesteed + "%</td></tr>";
-      }).join("");
-      return "<table class='rep'><thead><tr><th>Project</th><th>Opdrachtgever</th><th class='r'>Begroot</th><th class='r'>Begrote uren</th><th class='r'>Werkelijk</th><th class='r'>Besteed</th></tr></thead><tbody>" + rows + "</tbody></table>";
-    }
-    function roleTable() {
-      var rows = rolesSorted.map(function (r) {
-        return "<tr><td>" + esc(r.name) + "</td><td class='r'>" + uStr(r.begrootUren) + "</td><td class='r'>" + uStr(r.werkelijkUren) +
-          "</td><td class='r'>" + euroStr(r.begrootBedrag) + "</td></tr>";
-      }).join("");
-      return "<table class='rep'><thead><tr><th>Rol / functie</th><th class='r'>Begrote uren</th><th class='r'>Werkelijke uren</th><th class='r'>Begroot bedrag</th></tr></thead><tbody>" + rows + "</tbody></table>";
-    }
-    function planTable() {
-      if (!f.monthPlanning || !f.monthPlanning.length) return "";
-      var rows = f.monthPlanning.map(function (r) {
-        var u = r.utilization;
-        var col = u == null ? "" : u > 100 ? "background:#f8c9c2" : u > 85 ? "background:#fde2b8" : "background:#d7eccc";
-        return "<tr><td>" + esc(r.role) + "</td><td class='r'>" + uStr(r.plannedUren) + "</td><td class='r'>" + (r.capacityUren != null ? uStr(r.capacityUren) : "—") +
-          "</td><td class='r' style='" + col + "'>" + (u != null ? u + "%" : "—") + "</td></tr>";
-      }).join("");
-      return "<h3>Bezetting per rol — " + esc(f.periodLabel) + "</h3><table class='rep'><thead><tr><th>Rol</th><th class='r'>Gepland</th><th class='r'>Capaciteit</th><th class='r'>Bezetting</th></tr></thead><tbody>" + rows + "</tbody></table>";
-    }
 
     var p = f.portfolio;
     var kpis =
@@ -1412,10 +1435,10 @@
       "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk geboekte uren — per project</div>" + svgHtml(chartBvw) + "</div>" +
       mdToHtml(markdown) +
       "<h2>Onderbouwende cijfers</h2>" +
-      "<h3>Projecten</h3>" + projTable() +
-      "<h3>Inzet per rol</h3>" + roleTable() +
+      "<h3>Projecten</h3>" + projTableHtml(f) +
+      "<h3>Inzet per rol</h3>" + roleTableHtml(f) +
       "<div class='chart'><div class='ct'>Begroot vs. werkelijk per rol</div>" + svgHtml(chartRol) + "</div>" +
-      planTable() +
+      planTableHtml(f) +
       "<div class='footer'>HVP-TSB · " + esc(f.periodLabel) + " · " + esc(genStamp) + "</div>" +
       "</body></html>";
   }
