@@ -1,0 +1,18 @@
+{
+  "name": "hvp-tsb",
+  "version": "1.0.0",
+  "description": "Applicatie voor het opstellen van TSB's (kostenbegrotingen) op basis van instelbare formats.",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "pdfkit": "^0.15.0"
+  }
+}
