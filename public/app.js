@@ -1261,11 +1261,15 @@
       el("div", { class: "spacer" }), badge, dlHtml, dlPdf,
     ]));
 
-    var dash = el("div");
+    // Indeling: KPI's bovenaan, dan de AI-analyse (direct zichtbaar), dan de grafieken.
+    var kpis = el("div");
     var loader = el("div", { class: "ai-loading" }, [el("span", { class: "hourglass" }, ["⏳"]), el("span", null, ["AI-analyse wordt voorbereid…"])]);
     var live = el("div", { class: "md-report" }, [loader]);
-    app.appendChild(dash);
+    var charts = el("div");
+    app.appendChild(kpis);
     app.appendChild(el("div", { class: "card" }, [el("div", { style: "font-weight:600;margin-bottom:8px" }, ["AI-analyse"]), live]));
+    app.appendChild(el("h2", { style: "margin-top:6px" }, ["Grafieken"]));
+    app.appendChild(charts);
 
     var facts = null, md = "", aiUsed = false, started = false, dirty = false;
     function scheduleRender() {
@@ -1282,26 +1286,29 @@
     }
 
     streamReport(body,
-      function (f) { facts = f; clear(dash); dash.appendChild(renderFactsDashboard(f)); },
+      function (f) { facts = f; clear(kpis); kpis.appendChild(renderFactsKpis(f)); clear(charts); charts.appendChild(renderFactsCharts(f)); },
       function (chunk) { if (!started) { started = true; md = ""; } md += chunk; scheduleRender(); },
       function (done) { md = done.markdown || md; aiUsed = !!done.aiUsed; live.innerHTML = mdToHtml(md); badge.textContent = aiUsed ? "AI-analyse" : "zonder AI"; if (!aiUsed) badge.setAttribute("style", "background:#fde2b8;color:#92400e"); enableDownloads(); toast("Rapportage gereed"); },
       function (err) { badge.textContent = "fout"; toast(err.message, true); live.innerHTML = "<p style='color:#b42318'>" + esc(err.message) + "</p>"; }
     );
   }
 
-  // Dashboard (KPI's + grafieken + tabellen) als DOM, uit facts.
-  function renderFactsDashboard(f) {
+  function renderFactsKpis(f) {
     var euroStr = function (v) { return "€ " + (v || 0).toLocaleString("nl-NL"); };
     var uStr = function (v) { return nf(Math.round(v || 0)) + " u"; };
     var p = f.portfolio;
-    var wrap = el("div");
-    wrap.appendChild(el("div", { class: "kpi-grid" }, [
+    return el("div", { class: "kpi-grid" }, [
       kpiCard("Projecten", String(p.projectCount), "in rapportage"),
       kpiCard("Totaal begroot", euroStr(p.begrootBedrag), uStr(p.begrootUren)),
       kpiCard("Werkelijk geboekt", uStr(p.werkelijkUren), p.pctBesteed + "% · " + euroStr(p.werkelijkBedrag)),
       f.period ? kpiCard("Geboekt " + f.periodLabel, uStr(p.maandWerkelijkUren), euroStr(p.maandWerkelijkBedrag))
                : kpiCard("Resterend begroot", uStr(p.begrootUren - p.werkelijkUren), "nog te besteden"),
-    ]));
+    ]);
+  }
+  function renderFactsCharts(f) {
+    var euroStr = function (v) { return "€ " + (v || 0).toLocaleString("nl-NL"); };
+    var uStr = function (v) { return nf(Math.round(v || 0)) + " u"; };
+    var wrap = el("div");
     var projSorted = f.projects.slice().sort(function (a, b) { return b.begrootBedrag - a.begrootBedrag; });
     var phaseColors = { VO: "#1f4e79", DO: "#2e8b57", UO: "#d97706" };
     var row = el("div", { class: "report-grid" });
@@ -1427,13 +1434,14 @@
       "<h1>" + esc(f.title) + "</h1>" +
       "<div class='sub'>" + esc(f.periodLabel) + " · gegenereerd op " + esc(genStamp) + (aiUsed ? " · AI-analyse" : " · zonder AI") + "</div>" +
       "<div class='kpis'>" + kpis + "</div>" +
+      mdToHtml(markdown) +
+      "<h2>Grafieken</h2>" +
       "<div class='charts'>" +
         "<div class='chart'><div class='ct'>Begroot bedrag per project</div>" + svgHtml(chartBedrag) + "</div>" +
         "<div class='chart'><div class='ct'>Verdeling per fase</div>" + svgHtml(chartFase) + "</div>" +
       "</div>" +
       "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk geboekte uren — per project</div>" + svgHtml(chartBvw) + "</div>" +
       "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk per rol</div>" + svgHtml(chartRol) + "</div>" +
-      mdToHtml(markdown) +
       "<div class='footer'>HVP-TSB · " + esc(f.periodLabel) + " · " + esc(genStamp) + "</div>" +
       "</body></html>";
   }
@@ -1456,7 +1464,7 @@
   function hBarChart(data, opts) {
     opts = opts || {};
     var fmt = opts.fmt || function (v) { return nf(v); };
-    var labelW = 190, barH = 24, gap = 10, w = 720, padR = 110;
+    var labelW = 200, barH = 22, gap = 11, w = 780, padR = 168;
     var h = data.length * (barH + gap) + 8;
     var max = data.reduce(function (m, d) { return Math.max(m, d.value); }, 0) || 1;
     var scaleW = w - labelW - padR;
@@ -1464,7 +1472,7 @@
     data.forEach(function (d, i) {
       var y = i * (barH + gap) + 4;
       var bw = Math.max((d.value / max) * scaleW, d.value > 0 ? 2 : 0);
-      kids.push(svgEl("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end", class: "svg-lbl" }, [d.label.length > 30 ? d.label.slice(0, 29) + "…" : d.label]));
+      kids.push(svgEl("text", { x: labelW - 8, y: y + barH / 2 + 4, "text-anchor": "end", class: "svg-lbl" }, [d.label.length > 32 ? d.label.slice(0, 31) + "…" : d.label]));
       kids.push(svgEl("rect", { x: labelW, y: y, width: bw, height: barH, rx: 4, fill: d.color || "#1f4e79" }));
       kids.push(svgEl("text", { x: labelW + bw + 6, y: y + barH / 2 + 4, class: "svg-val" }, [fmt(d.value)]));
     });
@@ -1477,7 +1485,7 @@
     var fmt = opts.fmt || function (v) { return nf(v); };
     var A = opts.seriesA || { name: "A", color: "#94a8c4" };
     var B = opts.seriesB || { name: "B", color: "#1f4e79" };
-    var labelW = 190, barH = 11, gapIn = 2, gap = 14, w = 720, padR = 110;
+    var labelW = 200, barH = 11, gapIn = 2, gap = 14, w = 780, padR = 168;
     var groupH = barH * 2 + gapIn;
     var h = rows.length * (groupH + gap) + 26;
     var max = rows.reduce(function (m, d) { return Math.max(m, d.a, d.b); }, 0) || 1;
@@ -1492,7 +1500,7 @@
       var y = 22 + i * (groupH + gap);
       var aw = Math.max((d.a / max) * scaleW, d.a > 0 ? 2 : 0);
       var bw = Math.max((d.b / max) * scaleW, d.b > 0 ? 2 : 0);
-      kids.push(svgEl("text", { x: labelW - 8, y: y + groupH / 2 + 4, "text-anchor": "end", class: "svg-lbl" }, [d.label.length > 30 ? d.label.slice(0, 29) + "…" : d.label]));
+      kids.push(svgEl("text", { x: labelW - 8, y: y + groupH / 2 + 4, "text-anchor": "end", class: "svg-lbl" }, [d.label.length > 32 ? d.label.slice(0, 31) + "…" : d.label]));
       kids.push(svgEl("rect", { x: labelW, y: y, width: aw, height: barH, rx: 3, fill: A.color }));
       kids.push(svgEl("text", { x: labelW + aw + 6, y: y + barH - 1, class: "svg-val" }, [fmt(d.a)]));
       kids.push(svgEl("rect", { x: labelW, y: y + barH + gapIn, width: bw, height: barH, rx: 3, fill: B.color }));
