@@ -1077,27 +1077,39 @@
     if (!projects.length) { holder.appendChild(el("div", { class: "empty" }, ["Nog geen projecten."])); return; }
 
     // ---- Filterbalk ----
-    var filterCard = el("div", { class: "card" });
-    filterCard.appendChild(el("div", { style: "font-weight:600;margin-bottom:8px" }, ["Filters"]));
-    var projWrap = el("div", { style: "margin-bottom:8px" }, [el("span", { class: "muted", style: "font-size:13px;margin-right:8px;color:var(--muted)" }, ["Projecten:"])]);
+    var chips = el("div", { class: "chips" });
     projects.forEach(function (p) {
-      var cb = el("input", { type: "checkbox" }); cb.checked = reportState.projSel[p.id] !== false;
-      cb.addEventListener("change", function () { reportState.projSel[p.id] = cb.checked; drawReportDashboard(); });
-      projWrap.appendChild(el("label", { style: "margin-right:14px;font-size:13px;cursor:pointer" }, [cb, " " + shortName(p.name)]));
+      var on = reportState.projSel[p.id] !== false;
+      chips.appendChild(el("button", { class: "chip" + (on ? " active" : ""), onclick: function () {
+        reportState.projSel[p.id] = !on; drawReportDashboard();
+      } }, [shortName(p.name)]));
     });
-    filterCard.appendChild(projWrap);
+    var quick = el("div", { class: "chip-actions" }, [
+      el("button", { class: "linkbtn", onclick: function () { projects.forEach(function (p) { reportState.projSel[p.id] = true; }); drawReportDashboard(); } }, ["alle"]),
+      el("span", null, ["·"]),
+      el("button", { class: "linkbtn", onclick: function () { projects.forEach(function (p) { reportState.projSel[p.id] = false; }); drawReportDashboard(); } }, ["geen"]),
+    ]);
 
-    var active = projects.filter(function (p) { return reportState.projSel[p.id] !== false; });
-
-    var months = availableMonths(active);
+    var months = availableMonths(projects);
     var monthSel = el("select", null, [el("option", { value: "" }, ["Volledige looptijd"])].concat(months.map(function (m) {
       return el("option", { value: m, selected: m === reportState.month ? "selected" : null }, [monthLabelStr(m)]);
     })));
     monthSel.addEventListener("change", function () { reportState.month = monthSel.value; drawReportDashboard(); });
-    filterCard.appendChild(el("div", { class: "row" }, [
-      el("label", { class: "field" }, ["Periode", monthSel]),
-    ]));
+
+    var filterCard = el("div", { class: "card filterbar" }, [
+      el("div", { class: "filter-group", style: "flex:1;min-width:280px" }, [
+        el("div", { class: "fl-lbl" }, ["Projecten", quick]),
+        chips,
+      ]),
+      el("div", { class: "filter-group" }, [
+        el("div", { class: "fl-lbl" }, ["Periode"]),
+        monthSel,
+      ]),
+    ]);
     holder.appendChild(filterCard);
+
+    var active = projects.filter(function (p) { return reportState.projSel[p.id] !== false; });
+    if (!active.length) { holder.appendChild(el("div", { class: "empty" }, ["Selecteer minstens één project."])); return; }
 
     // ---- Aggregatie ----
     var perProject = [], phaseAgg = {}, roleAgg = {};

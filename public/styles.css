@@ -230,6 +230,22 @@ table.tsb.plan input { width: 60px; }
 .svg-lbl { font-size: 12px; fill: var(--text); }
 .svg-val { font-size: 12px; fill: var(--muted); }
 
+/* Filterbalk rapportage */
+.filterbar { display: flex; gap: 28px; align-items: flex-start; flex-wrap: wrap; }
+.filter-group { display: flex; flex-direction: column; gap: 8px; }
+.fl-lbl { font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  border: 1px solid var(--border); background: #fff; color: var(--muted);
+  padding: 6px 14px; border-radius: 20px; font-size: 13px; cursor: pointer; transition: all 0.12s;
+}
+.chip:hover { border-color: var(--accent); color: var(--text); }
+.chip.active { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 600; }
+.chip-actions { display: inline-flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; font-weight: 400; }
+.linkbtn { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0; }
+.linkbtn:hover { text-decoration: underline; }
+.filterbar select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; min-width: 190px; background: #fff; }
+
 /* Live AI-rapportage (markdown) */
 .md-report h2 { font-size: 17px; color: var(--blue); border-bottom: 2px solid var(--blue-light); padding-bottom: 4px; margin: 20px 0 10px; }
 .md-report h3 { font-size: 15px; margin: 14px 0 4px; }
