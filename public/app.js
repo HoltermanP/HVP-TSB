@@ -1026,7 +1026,7 @@
   /* ==================================================================
      MANAGEMENTRAPPORTAGE
   ================================================================== */
-  var reportState = { projects: null, projSel: {}, roleSel: null, month: "" };
+  var reportState = { projects: null, projSel: {}, month: "" };
 
   function renderReport() {
     clear(app);
@@ -1089,26 +1089,13 @@
 
     var active = projects.filter(function (p) { return reportState.projSel[p.id] !== false; });
 
-    // rollen (functies) over actieve projecten
-    var allRoles = {};
-    active.forEach(function (p) { p.roles.forEach(function (r) { allRoles[r.name] = true; }); });
-    var roleNames = Object.keys(allRoles).sort();
-    var roleSel = el("select", { multiple: "multiple", size: "4", style: "min-width:240px" }, roleNames.map(function (nm) {
-      return el("option", { value: nm, selected: (reportState.roleSel && reportState.roleSel.indexOf(nm) >= 0) ? "selected" : null }, [nm]);
-    }));
-    roleSel.addEventListener("change", function () {
-      var sel = Array.prototype.filter.call(roleSel.options, function (o) { return o.selected; }).map(function (o) { return o.value; });
-      reportState.roleSel = sel.length ? sel : null; drawReportDashboard();
-    });
     var months = availableMonths(active);
     var monthSel = el("select", null, [el("option", { value: "" }, ["Volledige looptijd"])].concat(months.map(function (m) {
       return el("option", { value: m, selected: m === reportState.month ? "selected" : null }, [monthLabelStr(m)]);
     })));
     monthSel.addEventListener("change", function () { reportState.month = monthSel.value; drawReportDashboard(); });
     filterCard.appendChild(el("div", { class: "row" }, [
-      el("label", { class: "field" }, ["Functie (rol) — meerdere mogelijk", roleSel]),
       el("label", { class: "field" }, ["Periode", monthSel]),
-      reportState.roleSel ? el("button", { class: "btn secondary small", style: "align-self:flex-end", onclick: function () { reportState.roleSel = null; drawReportDashboard(); } }, ["Toon alle rollen"]) : null,
     ]));
     holder.appendChild(filterCard);
 
@@ -1165,10 +1152,10 @@
         { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#1f4e79" }, fmt: function (v) { return nf(Math.round(v)) + " u"; } })));
 
     var roleArr = Object.keys(roleAgg).map(function (nm) { return { name: nm, uren: roleAgg[nm].uren, actUren: roleAgg[nm].actUren || 0 }; })
-      .filter(function (r) { return r.uren > 0 && (!reportState.roleSel || reportState.roleSel.indexOf(r.name) >= 0); })
+      .filter(function (r) { return r.uren > 0; })
       .sort(function (a, b) { return b.uren - a.uren; });
     var row2 = el("div", { class: "report-grid" });
-    row2.appendChild(reportCard("Begrote uren per rol" + (reportState.roleSel ? " (selectie)" : ""),
+    row2.appendChild(reportCard("Begrote uren per rol",
       hBarChart(roleArr.map(function (r, i) { return { label: r.name, value: r.uren, color: PALETTE[i % PALETTE.length] }; }), { fmt: function (v) { return nf(Math.round(v)) + " u"; } })));
     row2.appendChild(reportCard("Begroot vs. werkelijk per rol",
       twoSeriesHBar(roleArr.map(function (r) { return { label: r.name, a: r.uren, b: r.actUren }; }),
@@ -1207,13 +1194,20 @@
   }
 
   // SSE over fetch (POST met body). Roept handlers aan per event.
+  // Valt terug op het niet-streamende /api/report als streaming niet beschikbaar is.
   function streamReport(body, onFacts, onDelta, onDone, onError) {
+    function fallbackJson() {
+      api.send("POST", "/api/report", body)
+        .then(function (resp) { onFacts(resp.facts); onDone({ markdown: resp.markdown, aiUsed: resp.aiUsed }); })
+        .catch(onError);
+    }
     fetch("/api/report/stream", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }).then(function (res) {
-      if (!res.ok || !res.body) throw new Error("Stream niet beschikbaar (" + res.status + ")");
+      var ct = res.headers.get("content-type") || "";
+      if (!res.ok || ct.indexOf("text/event-stream") < 0 || !res.body) { fallbackJson(); return; }
       var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
       function pump() {
         return reader.read().then(function (r) {
@@ -1237,7 +1231,7 @@
         });
       }
       return pump();
-    }).catch(onError);
+    }).catch(function () { fallbackJson(); });
   }
 
   // Live-weergave: dashboard + AI-analyse die live wordt geschreven, met download.

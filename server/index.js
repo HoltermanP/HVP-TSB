@@ -17,7 +17,12 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 
 const PUBLIC_DIR = path.join(__dirname, "..", "public");
-app.use(express.static(PUBLIC_DIR));
+app.use(express.static(PUBLIC_DIR, {
+  setHeaders: function (res, p) {
+    // Voorkom verouderde frontend-bundles: altijd revalideren.
+    if (/\.(html|js|css)$/.test(p)) res.setHeader("Cache-Control", "no-cache");
+  },
+}));
 
 function safeName(s) {
   return String(s || "tsb").replace(/[^a-z0-9_\- ]/gi, "_").trim() || "tsb";
@@ -129,6 +134,15 @@ app.post("/api/report/stream", async (req, res) => {
     catch (_) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
   }
 });
+
+// Niet-streamende variant (fallback voor omgevingen zonder SSE-streaming).
+app.post("/api/report", wrap(async (req, res) => {
+  const all = await store.getAllProjects();
+  const settings = await store.getSettings();
+  const facts = buildFacts(all, settings, req.body || {});
+  const result = await streamNarrative(facts);
+  res.json({ facts, markdown: result.markdown, aiUsed: result.aiUsed });
+}));
 
 /* ---------- Export ---------- */
 app.get("/api/projects/:id/export.xlsx", wrap(async (req, res) => {
