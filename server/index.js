@@ -8,7 +8,7 @@ const express = require("express");
 const store = require("./store");
 const { exportExcel } = require("./export-excel");
 const { exportPdf } = require("./export-pdf");
-const { buildFacts, generateNarrative, fallbackNarrative } = require("./ai-report");
+const { buildFacts, streamNarrative } = require("./ai-report");
 
 // Start de initialisatie alvast (schema + seed bij lege database).
 store.init().catch((e) => console.error("Init-fout:", e.message));
@@ -102,14 +102,33 @@ app.delete("/api/projects/:id", wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 
-/* ---------- AI-rapportage ---------- */
-app.post("/api/report", wrap(async (req, res) => {
-  const all = await store.getAllProjects();
-  const settings = await store.getSettings();
-  const facts = buildFacts(all, settings, req.body || {});
-  const narrative = await generateNarrative(facts);
-  res.json({ facts, narrative: narrative || fallbackNarrative(facts), aiUsed: !!narrative });
-}));
+/* ---------- AI-rapportage (live, Server-Sent Events) ---------- */
+app.post("/api/report/stream", async (req, res) => {
+  function send(event, data) {
+    res.write("event: " + event + "\ndata: " + JSON.stringify(data) + "\n\n");
+    if (res.flush) res.flush();
+  }
+  try {
+    const all = await store.getAllProjects();
+    const settings = await store.getSettings();
+    const facts = buildFacts(all, settings, req.body || {});
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no"); // schakel proxy-buffering uit
+    if (res.flushHeaders) res.flushHeaders();
+
+    send("facts", facts);
+    const result = await streamNarrative(facts, (chunk) => send("delta", chunk));
+    send("done", { aiUsed: result.aiUsed, markdown: result.markdown });
+    res.end();
+  } catch (e) {
+    console.error(e);
+    try { send("error", { message: e.message }); res.end(); }
+    catch (_) { if (!res.headersSent) res.status(500).json({ error: e.message }); }
+  }
+});
 
 /* ---------- Export ---------- */
 app.get("/api/projects/:id/export.xlsx", wrap(async (req, res) => {

@@ -160,100 +160,90 @@ function buildFacts(allProjects, settings, opts) {
   };
 }
 
-/* ---------------- AI-narratief ---------------- */
-const NARRATIVE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    titel: { type: "string" },
-    managementsamenvatting: { type: "string" },
-    kerncijfers_toelichting: { type: "string" },
-    projecten: { type: "array", items: { type: "object", additionalProperties: false, properties: { naam: { type: "string" }, analyse: { type: "string" } }, required: ["naam", "analyse"] } },
-    bezetting_analyse: { type: "string" },
-    risicos: { type: "array", items: { type: "string" } },
-    aanbevelingen: { type: "array", items: { type: "string" } },
-    conclusie: { type: "string" },
-  },
-  required: ["titel", "managementsamenvatting", "kerncijfers_toelichting", "projecten", "bezetting_analyse", "risicos", "aanbevelingen", "conclusie"],
-};
-
+/* ---------------- AI-narratief (streaming Markdown) ---------------- */
 const SYSTEM_PROMPT = [
   "Je bent een ervaren projectbeheersings-/PMO-analist bij een ingenieursbureau dat 20kV middenspannings-netuitbreidingen ontwerpt.",
-  "Schrijf een zakelijke, heldere managementrapportage in het Nederlands, uitsluitend op basis van de aangeleverde cijfers (JSON).",
-  "Wees concreet en gebruik de werkelijke getallen (bedragen in euro's, uren, percentages). Signaleer over- en onderbesteding, afwijkingen tussen begroot en werkelijk, en bezettings-/capaciteitsknelpunten.",
-  "Verzin geen gegevens die niet in de data staan. Schrijf vlot leesbaar; je mag markdown gebruiken (alinea's, **vet**, opsommingen met '- ').",
+  "Schrijf een uitgebreide, zakelijke managementrapportage in het Nederlands in Markdown, uitsluitend op basis van de aangeleverde cijfers (JSON).",
+  "Gebruik exact deze secties als '##'-koppen, in deze volgorde: Managementsamenvatting, Kerncijfers, Projecten, Personeelsbezetting, Risico's, Aanbevelingen, Conclusie.",
+  "Onder 'Projecten' geef je per project een '###'-kop met de projectnaam, gevolgd door een korte analyse. Onder 'Risico's' en 'Aanbevelingen' gebruik je opsommingen met '- '.",
+  "Begin NIET met een '#'-titel (die staat al boven het rapport). Wees concreet met de werkelijke getallen (euro's, uren, percentages); signaleer over- en onderbesteding en bezettings-/capaciteitsknelpunten. Verzin niets buiten de data.",
 ].join(" ");
 
-async function generateNarrative(facts) {
-  if (!process.env.ANTHROPIC_API_KEY) return null;
+// Streamt de AI-analyse als Markdown. onDelta(chunk) wordt per tekstfragment
+// aangeroepen. Geeft { aiUsed, markdown } terug; valt terug op een sjabloon
+// wanneer er geen API-sleutel/SDK is of een fout optreedt vóór output.
+async function streamNarrative(facts, onDelta) {
+  if (!process.env.ANTHROPIC_API_KEY) return { aiUsed: false, markdown: fallbackMarkdown(facts) };
   let Anthropic;
   try {
     const mod = require("@anthropic-ai/sdk");
     Anthropic = mod.default || mod;
   } catch (e) {
     console.warn("Anthropic SDK niet beschikbaar:", e.message);
-    return null;
+    return { aiUsed: false, markdown: fallbackMarkdown(facts) };
   }
+  const client = new Anthropic();
+  const user = [
+    "Stel de managementrapportage op voor de periode: " + facts.periodLabel + ".",
+    "Hieronder de cijfers als JSON.",
+    "",
+    JSON.stringify(facts),
+  ].join("\n");
+  let full = "";
   try {
-    const client = new Anthropic();
-    const user = [
-      "Stel de managementrapportage op voor de periode: " + facts.periodLabel + ".",
-      "Hieronder de cijfers als JSON. Geef een uitgebreide analyse met: managementsamenvatting (meerdere alinea's), toelichting op de kerncijfers, per project een korte analyse, een analyse van de personeelsbezetting/capaciteit, risico's, concrete aanbevelingen en een conclusie.",
-      "Voor 'projecten' lever je per project in de data een item met exact dezelfde naam.",
-      "",
-      JSON.stringify(facts),
-    ].join("\n");
-
     const stream = client.messages.stream({
       model: "claude-opus-4-8",
       max_tokens: 12000,
       thinking: { type: "adaptive" },
-      output_config: { format: { type: "json_schema", schema: NARRATIVE_SCHEMA }, effort: "medium" },
+      output_config: { effort: "medium" },
       system: SYSTEM_PROMPT,
       messages: [{ role: "user", content: user }],
     });
-    const msg = await stream.finalMessage();
-    const textBlock = (msg.content || []).find((b) => b.type === "text");
-    if (!textBlock) return null;
-    return JSON.parse(textBlock.text);
+    stream.on("text", (delta) => { full += delta; if (onDelta) onDelta(delta); });
+    await stream.finalMessage();
+    return { aiUsed: true, markdown: full };
   } catch (e) {
-    console.error("AI-rapportage mislukt, val terug op sjabloon:", e.message);
-    return null;
+    console.error("AI-rapportage mislukt:", e.message);
+    if (full.trim()) return { aiUsed: true, markdown: full }; // gedeeltelijk resultaat behouden
+    return { aiUsed: false, markdown: fallbackMarkdown(facts) };
   }
 }
 
-/* ---------------- Sjabloon zonder AI ---------------- */
+/* ---------------- Markdown-sjabloon zonder AI ---------------- */
 function euro(n) { return "€ " + (n || 0).toLocaleString("nl-NL"); }
-function fallbackNarrative(facts) {
+function fallbackMarkdown(facts) {
   const p = facts.portfolio;
-  return {
-    titel: facts.title,
-    managementsamenvatting:
-      "Deze rapportage beslaat " + facts.periodLabel.toLowerCase() + " en omvat " + p.projectCount + " project(en). " +
-      "Het totaal begrote bedrag is " + euro(p.begrootBedrag) + " (" + p.begrootUren + " uur). " +
-      "Tot nu toe is " + p.werkelijkUren + " uur geboekt (" + p.pctBesteed + "% van de begrote uren), met een waarde van " + euro(p.werkelijkBedrag) + ".",
-    kerncijfers_toelichting:
-      "Begroot: " + euro(p.begrootBedrag) + " / " + p.begrootUren + " uur. Werkelijk geboekt: " + p.werkelijkUren + " uur (" + euro(p.werkelijkBedrag) + "). " +
-      (facts.period ? "In deze maand is " + p.maandWerkelijkUren + " uur geboekt (" + euro(p.maandWerkelijkBedrag) + ")." : "Cijfers betreffen de volledige looptijd."),
-    projecten: facts.projects.map((pr) => ({
-      naam: pr.name,
-      analyse: pr.name + " (" + (pr.client || "") + "): begroot " + euro(pr.begrootBedrag) + " / " + pr.begrootUren +
-        " uur; geboekt " + pr.werkelijkUren + " uur (" + pr.pctBesteed + "%). Fasen: " +
-        pr.phases.map((f) => f.key + " " + f.status).join(", ") + ".",
-    })),
-    bezetting_analyse: facts.monthPlanning && facts.monthPlanning.length
-      ? "Geplande inzet deze maand per rol: " + facts.monthPlanning.map((r) => r.role + " " + r.plannedUren + " u" + (r.utilization != null ? " (" + r.utilization + "%)" : "")).join("; ") + "."
-      : "Stel capaciteit per rol in en kies een maand om de bezetting te analyseren.",
-    risicos: [
-      "Afwijkingen tussen begrote en werkelijke uren kunnen wijzen op scope- of inschattingsverschillen.",
-      "Rollen met meer dan 100% bezetting in een maand vormen een planningsrisico.",
-    ],
-    aanbevelingen: [
-      "Monitor projecten met een hoog bestedingspercentage maar onafgeronde fasen.",
-      "Stem de capaciteit per rol af op de piekmaanden in de planning.",
-    ],
-    conclusie: "Het portfolio omvat " + p.projectCount + " project(en) met een totale begroting van " + euro(p.begrootBedrag) + ". Stel ANTHROPIC_API_KEY in voor een uitgebreide AI-analyse.",
-  };
+  const lines = [];
+  lines.push("## Managementsamenvatting", "");
+  lines.push("Deze rapportage beslaat " + facts.periodLabel.toLowerCase() + " en omvat **" + p.projectCount + "** project(en). " +
+    "Het totaal begrote bedrag is **" + euro(p.begrootBedrag) + "** (" + p.begrootUren + " uur). " +
+    "Tot nu toe is **" + p.werkelijkUren + " uur** geboekt (" + p.pctBesteed + "% van de begrote uren), met een waarde van " + euro(p.werkelijkBedrag) + ".", "");
+  lines.push("## Kerncijfers", "");
+  lines.push("- Begroot: **" + euro(p.begrootBedrag) + "** / " + p.begrootUren + " uur");
+  lines.push("- Werkelijk geboekt: **" + p.werkelijkUren + " uur** (" + euro(p.werkelijkBedrag) + ")");
+  if (facts.period) lines.push("- In deze periode geboekt: " + p.maandWerkelijkUren + " uur (" + euro(p.maandWerkelijkBedrag) + ")");
+  lines.push("");
+  lines.push("## Projecten", "");
+  facts.projects.forEach((pr) => {
+    lines.push("### " + pr.name);
+    lines.push((pr.client ? pr.client + ". " : "") + "Begroot " + euro(pr.begrootBedrag) + " / " + pr.begrootUren +
+      " uur; geboekt " + pr.werkelijkUren + " uur (" + pr.pctBesteed + "%). Fasen: " +
+      pr.phases.map((f) => f.key + " (" + f.status + ")").join(", ") + ".", "");
+  });
+  lines.push("## Personeelsbezetting", "");
+  lines.push(facts.monthPlanning && facts.monthPlanning.length
+    ? "Geplande inzet deze periode per rol: " + facts.monthPlanning.map((r) => r.role + " " + r.plannedUren + " u" + (r.utilization != null ? " (" + r.utilization + "%)" : "")).join("; ") + "."
+    : "Stel capaciteit per rol in en kies een maand om de bezetting te analyseren.", "");
+  lines.push("## Risico's", "");
+  lines.push("- Afwijkingen tussen begrote en werkelijke uren kunnen wijzen op scope- of inschattingsverschillen.");
+  lines.push("- Rollen met meer dan 100% bezetting in een maand vormen een planningsrisico.", "");
+  lines.push("## Aanbevelingen", "");
+  lines.push("- Monitor projecten met een hoog bestedingspercentage maar onafgeronde fasen.");
+  lines.push("- Stem de capaciteit per rol af op de piekmaanden in de planning.", "");
+  lines.push("## Conclusie", "");
+  lines.push("Het portfolio omvat " + p.projectCount + " project(en) met een totale begroting van " + euro(p.begrootBedrag) +
+    ". Stel `ANTHROPIC_API_KEY` in voor een uitgebreide AI-analyse.");
+  return lines.join("\n");
 }
 
-module.exports = { buildFacts, generateNarrative, fallbackNarrative };
+module.exports = { buildFacts, streamNarrative, fallbackMarkdown };

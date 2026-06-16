@@ -1201,32 +1201,112 @@
         var ids = scope.value === "all" ? [] : (reportState.projects || []).filter(function (p) { return reportState.projSel[p.id] !== false; }).map(function (p) { return p.id; });
         var body = { projectIds: ids, month: monthSel.value || null, title: title.value };
         m.close();
-        toast("Rapportage wordt gegenereerd…");
-        api.send("POST", "/api/report", body)
-          .then(function (resp) { showGeneratedReport(resp); })
-          .catch(function (e) { toast(e.message, true); });
+        generateReportLive(body);
       } }, ["Genereren"]),
     ]);
   }
 
-  function showGeneratedReport(resp) {
-    var html = buildReportHtml(resp.facts, resp.narrative, resp.aiUsed);
-    clear(app);
-    app.appendChild(el("div", { class: "breadcrumb", onclick: function () { state.view = "report"; render(); } }, ["← Terug naar rapportage"]));
-    app.appendChild(el("div", { class: "row", style: "margin-bottom:10px" }, [
-      el("h1", null, [resp.narrative.titel || "Rapportage"]),
-      el("div", { class: "spacer" }),
-      resp.aiUsed ? el("span", { class: "tag" }, ["AI-analyse"]) : el("span", { class: "tag", style: "background:#fde2b8;color:#92400e" }, ["Zonder AI (stel ANTHROPIC_API_KEY in)"]),
-      el("button", { class: "btn secondary small", onclick: function () { downloadFile(resp.narrative.titel + ".html", html, "text/html"); } }, ["⬇ HTML"]),
-      el("button", { class: "btn small", onclick: function () { printIframe(); } }, ["⬇ PDF / Print"]),
-    ]));
-    var frame = el("iframe", { id: "report-frame", style: "width:100%;height:75vh;border:1px solid var(--border);border-radius:10px;background:#fff" });
-    frame.srcdoc = html;
-    app.appendChild(frame);
+  // SSE over fetch (POST met body). Roept handlers aan per event.
+  function streamReport(body, onFacts, onDelta, onDone, onError) {
+    fetch("/api/report/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }).then(function (res) {
+      if (!res.ok || !res.body) throw new Error("Stream niet beschikbaar (" + res.status + ")");
+      var reader = res.body.getReader(), dec = new TextDecoder(), buf = "";
+      function pump() {
+        return reader.read().then(function (r) {
+          if (r.done) return;
+          buf += dec.decode(r.value, { stream: true });
+          var blocks = buf.split("\n\n"); buf = blocks.pop();
+          blocks.forEach(function (block) {
+            var ev = "message", data = "";
+            block.split("\n").forEach(function (line) {
+              if (line.indexOf("event:") === 0) ev = line.slice(6).trim();
+              else if (line.indexOf("data:") === 0) data += line.slice(5).replace(/^ /, "");
+            });
+            if (!data) return;
+            var parsed; try { parsed = JSON.parse(data); } catch (_) { parsed = data; }
+            if (ev === "facts") onFacts(parsed);
+            else if (ev === "delta") onDelta(parsed);
+            else if (ev === "done") onDone(parsed);
+            else if (ev === "error") onError(new Error((parsed && parsed.message) || "fout"));
+          });
+          return pump();
+        });
+      }
+      return pump();
+    }).catch(onError);
   }
-  function printIframe() {
-    var f = document.getElementById("report-frame");
-    if (f && f.contentWindow) { f.contentWindow.focus(); f.contentWindow.print(); }
+
+  // Live-weergave: dashboard + AI-analyse die live wordt geschreven, met download.
+  function generateReportLive(body) {
+    state.view = "report";
+    setActiveNav("report");
+    clear(app);
+    app.appendChild(el("div", { class: "breadcrumb", onclick: function () { renderReport(); } }, ["← Terug naar rapportage"]));
+
+    var badge = el("span", { class: "tag" }, ["bezig…"]);
+    var dlHtml = el("button", { class: "btn secondary small", disabled: "disabled" }, ["⬇ HTML"]);
+    var dlPdf = el("button", { class: "btn small", disabled: "disabled" }, ["⬇ PDF / Print"]);
+    app.appendChild(el("div", { class: "row", style: "margin-bottom:10px" }, [
+      el("h1", null, [body.title || "Rapportage"]),
+      el("div", { class: "spacer" }), badge, dlHtml, dlPdf,
+    ]));
+
+    var dash = el("div");
+    var live = el("div", { class: "md-report" }, [el("span", { style: "color:var(--muted)" }, ["AI-analyse wordt geschreven…"])]);
+    app.appendChild(dash);
+    app.appendChild(el("div", { class: "card" }, [el("div", { style: "font-weight:600;margin-bottom:8px" }, ["AI-analyse"]), live]));
+
+    var facts = null, md = "", aiUsed = false, started = false, dirty = false;
+    function scheduleRender() {
+      if (dirty) return; dirty = true;
+      requestAnimationFrame(function () { dirty = false; live.innerHTML = mdToHtml(md); });
+    }
+    function enableDownloads() {
+      var html = buildReportHtml(facts, md, aiUsed);
+      var frame = el("iframe", { id: "report-frame", style: "display:none" });
+      frame.srcdoc = html; document.body.appendChild(frame);
+      dlHtml.disabled = false; dlPdf.disabled = false;
+      dlHtml.onclick = function () { downloadFile((body.title || "rapport") + ".html", html, "text/html"); };
+      dlPdf.onclick = function () { var f = document.getElementById("report-frame"); if (f && f.contentWindow) { f.contentWindow.focus(); f.contentWindow.print(); } };
+    }
+
+    streamReport(body,
+      function (f) { facts = f; clear(dash); dash.appendChild(renderFactsDashboard(f)); },
+      function (chunk) { if (!started) { started = true; md = ""; } md += chunk; scheduleRender(); },
+      function (done) { md = done.markdown || md; aiUsed = !!done.aiUsed; live.innerHTML = mdToHtml(md); badge.textContent = aiUsed ? "AI-analyse" : "zonder AI"; if (!aiUsed) badge.setAttribute("style", "background:#fde2b8;color:#92400e"); enableDownloads(); toast("Rapportage gereed"); },
+      function (err) { badge.textContent = "fout"; toast(err.message, true); live.innerHTML = "<p style='color:#b42318'>" + esc(err.message) + "</p>"; }
+    );
+  }
+
+  // Dashboard (KPI's + grafieken + tabellen) als DOM, uit facts.
+  function renderFactsDashboard(f) {
+    var euroStr = function (v) { return "€ " + (v || 0).toLocaleString("nl-NL"); };
+    var uStr = function (v) { return nf(Math.round(v || 0)) + " u"; };
+    var p = f.portfolio;
+    var wrap = el("div");
+    wrap.appendChild(el("div", { class: "kpi-grid" }, [
+      kpiCard("Projecten", String(p.projectCount), "in rapportage"),
+      kpiCard("Totaal begroot", euroStr(p.begrootBedrag), uStr(p.begrootUren)),
+      kpiCard("Werkelijk geboekt", uStr(p.werkelijkUren), p.pctBesteed + "% · " + euroStr(p.werkelijkBedrag)),
+      f.period ? kpiCard("Geboekt " + f.periodLabel, uStr(p.maandWerkelijkUren), euroStr(p.maandWerkelijkBedrag))
+               : kpiCard("Resterend begroot", uStr(p.begrootUren - p.werkelijkUren), "nog te besteden"),
+    ]));
+    var projSorted = f.projects.slice().sort(function (a, b) { return b.begrootBedrag - a.begrootBedrag; });
+    var phaseColors = { VO: "#1f4e79", DO: "#2e8b57", UO: "#d97706" };
+    var row = el("div", { class: "report-grid" });
+    row.appendChild(reportCard("Begroot bedrag per project",
+      hBarChart(projSorted.map(function (pr, i) { return { label: shortName(pr.name), value: pr.begrootBedrag, color: PALETTE[i % PALETTE.length] }; }), { fmt: euroStr })));
+    row.appendChild(reportCard("Verdeling per fase",
+      donutChart(f.phases.map(function (ph) { return { label: ph.key, value: ph.bedrag, sub: uStr(ph.uren), color: phaseColors[ph.key] || "#1f4e79" }; }), { fmt: euroStr })));
+    wrap.appendChild(row);
+    wrap.appendChild(reportCard("Begroot vs. werkelijk geboekte uren — per project",
+      twoSeriesHBar(projSorted.map(function (pr) { return { label: shortName(pr.name), a: pr.begrootUren, b: pr.werkelijkUren }; }),
+        { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#1f4e79" }, fmt: uStr })));
+    return wrap;
   }
   function downloadFile(name, content, mime) {
     var blob = new Blob([content], { type: mime + ";charset=utf-8" });
@@ -1247,6 +1327,8 @@
     lines.forEach(function (ln) {
       var t = ln.trim();
       if (!t) { flushPara(); flushList(); return; }
+      var h = t.match(/^(#{1,4})\s+(.*)$/);
+      if (h) { flushPara(); flushList(); var lvl = Math.min(h[1].length + 1, 4); out.push("<h" + lvl + ">" + inline(h[2]) + "</h" + lvl + ">"); return; }
       if (/^[-*]\s+/.test(t)) { flushPara(); if (!list) list = []; list.push("<li>" + inline(t.replace(/^[-*]\s+/, "")) + "</li>"); }
       else { flushList(); para.push(t); }
     });
@@ -1255,15 +1337,14 @@
   }
   function svgHtml(node) { return node ? node.outerHTML : ""; }
 
-  function buildReportHtml(facts, narrative, aiUsed) {
-    var f = facts, n = narrative;
+  function buildReportHtml(facts, markdown, aiUsed) {
+    var f = facts;
     var euroStr = function (v) { return "€ " + (v || 0).toLocaleString("nl-NL"); };
     var uStr = function (v) { return nf(Math.round(v || 0)) + " u"; };
 
-    // Grafieken (SVG)
     var projSorted = f.projects.slice().sort(function (a, b) { return b.begrootBedrag - a.begrootBedrag; });
-    var chartBedrag = hBarChart(projSorted.map(function (p, i) { return { label: shortName(p.name), value: p.begrootBedrag, color: PALETTE[i % PALETTE.length] }; }), { fmt: euroStr });
     var phaseColors = { VO: "#1f4e79", DO: "#2e8b57", UO: "#d97706" };
+    var chartBedrag = hBarChart(projSorted.map(function (p, i) { return { label: shortName(p.name), value: p.begrootBedrag, color: PALETTE[i % PALETTE.length] }; }), { fmt: euroStr });
     var chartFase = donutChart(f.phases.map(function (p) { return { label: p.key, value: p.bedrag, sub: uStr(p.uren), color: phaseColors[p.key] || "#1f4e79" }; }), { fmt: euroStr });
     var chartBvw = twoSeriesHBar(projSorted.map(function (p) { return { label: shortName(p.name), a: p.begrootUren, b: p.werkelijkUren }; }),
       { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#1f4e79" }, fmt: uStr });
@@ -1271,7 +1352,6 @@
     var chartRol = twoSeriesHBar(rolesSorted.map(function (r) { return { label: r.name, a: r.begrootUren, b: r.werkelijkUren }; }),
       { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" }, fmt: uStr });
 
-    // Tabellen
     function projTable() {
       var rows = f.projects.map(function (p) {
         return "<tr><td>" + esc(p.name) + "</td><td>" + esc(p.client || "") + "</td><td class='r'>" + euroStr(p.begrootBedrag) +
@@ -1294,7 +1374,7 @@
         return "<tr><td>" + esc(r.role) + "</td><td class='r'>" + uStr(r.plannedUren) + "</td><td class='r'>" + (r.capacityUren != null ? uStr(r.capacityUren) : "—") +
           "</td><td class='r' style='" + col + "'>" + (u != null ? u + "%" : "—") + "</td></tr>";
       }).join("");
-      return "<h2>Personeelsbezetting — " + esc(f.periodLabel) + "</h2><table class='rep'><thead><tr><th>Rol</th><th class='r'>Gepland</th><th class='r'>Capaciteit</th><th class='r'>Bezetting</th></tr></thead><tbody>" + rows + "</tbody></table>";
+      return "<h3>Bezetting per rol — " + esc(f.periodLabel) + "</h3><table class='rep'><thead><tr><th>Rol</th><th class='r'>Gepland</th><th class='r'>Capaciteit</th><th class='r'>Bezetting</th></tr></thead><tbody>" + rows + "</tbody></table>";
     }
 
     var p = f.portfolio;
@@ -1305,41 +1385,31 @@
       (f.period ? kpiHtml("Geboekt deze periode", uStr(p.maandWerkelijkUren), euroStr(p.maandWerkelijkBedrag))
                 : kpiHtml("Resterend begroot", uStr(p.begrootUren - p.werkelijkUren), "nog te besteden"));
 
-    var projAnalyses = (n.projecten || []).map(function (pa) {
-      return "<div class='proj'><h3>" + esc(pa.naam) + "</h3>" + mdToHtml(pa.analyse) + "</div>";
-    }).join("");
-    var risks = (n.risicos || []).map(function (r) { return "<li>" + inlineEsc(r) + "</li>"; }).join("");
-    var recs = (n.aanbevelingen || []).map(function (r) { return "<li>" + inlineEsc(r) + "</li>"; }).join("");
-    function inlineEsc(s) { return esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"); }
-
     var genStamp = new Date().toLocaleString("nl-NL");
-    var css = "*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2733;margin:0;padding:32px;max-width:980px;margin:0 auto;line-height:1.5}" +
-      "h1{font-size:26px;color:#1f4e79;margin:0 0 4px}h2{font-size:18px;color:#1f4e79;border-bottom:2px solid #d9e1f2;padding-bottom:4px;margin:28px 0 12px}h3{font-size:15px;margin:14px 0 4px}" +
+    var css = "*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2733;margin:0 auto;padding:32px;max-width:980px;line-height:1.5}" +
+      "h1{font-size:26px;color:#1f4e79;margin:0 0 4px}h2{font-size:18px;color:#1f4e79;border-bottom:2px solid #d9e1f2;padding-bottom:4px;margin:28px 0 12px}h3{font-size:15px;margin:16px 0 4px}h4{font-size:13px;margin:12px 0 4px}" +
       ".sub{color:#6b7785;font-size:13px;margin-bottom:18px}p{margin:0 0 10px}ul{margin:0 0 10px 18px}" +
       ".kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.kpi{border:1px solid #d8dde3;border-radius:10px;padding:12px}.kpi .t{color:#6b7785;font-size:12px}.kpi .v{font-size:20px;font-weight:700;color:#1f4e79}.kpi .s{color:#6b7785;font-size:11px}" +
       ".charts{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}.chart{border:1px solid #eee;border-radius:8px;padding:10px}.chart .ct{font-weight:600;margin-bottom:8px;font-size:14px}" +
       "table.rep{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 16px}table.rep th,table.rep td{border:1px solid #e6eaef;padding:5px 8px;text-align:left}table.rep th{background:#f0f3f7}td.r,th.r{text-align:right}" +
-      ".proj{margin-bottom:10px}.muted{color:#6b7785}.footer{margin-top:30px;color:#6b7785;font-size:11px;border-top:1px solid #e6eaef;padding-top:8px}" +
-      "@media print{body{padding:0}h2{page-break-after:avoid}.proj,table.rep,.chart{page-break-inside:avoid}}";
+      ".muted{color:#6b7785}.footer{margin-top:30px;color:#6b7785;font-size:11px;border-top:1px solid #e6eaef;padding-top:8px}" +
+      "@media print{body{padding:0}h2{page-break-after:avoid}table.rep,.chart{page-break-inside:avoid}}";
 
-    return "<!doctype html><html lang='nl'><head><meta charset='utf-8'><title>" + esc(n.titel) + "</title><style>" + css + "</style></head><body>" +
-      "<h1>" + esc(n.titel) + "</h1>" +
+    return "<!doctype html><html lang='nl'><head><meta charset='utf-8'><title>" + esc(f.title) + "</title><style>" + css + "</style></head><body>" +
+      "<h1>" + esc(f.title) + "</h1>" +
       "<div class='sub'>" + esc(f.periodLabel) + " · gegenereerd op " + esc(genStamp) + (aiUsed ? " · AI-analyse" : " · zonder AI") + "</div>" +
-      "<h2>Managementsamenvatting</h2>" + mdToHtml(n.managementsamenvatting) +
       "<div class='kpis'>" + kpis + "</div>" +
-      "<h2>Kerncijfers</h2>" + mdToHtml(n.kerncijfers_toelichting) +
       "<div class='charts'>" +
         "<div class='chart'><div class='ct'>Begroot bedrag per project</div>" + svgHtml(chartBedrag) + "</div>" +
         "<div class='chart'><div class='ct'>Verdeling per fase</div>" + svgHtml(chartFase) + "</div>" +
       "</div>" +
       "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk geboekte uren — per project</div>" + svgHtml(chartBvw) + "</div>" +
-      "<h2>Projecten</h2>" + projTable() + projAnalyses +
-      "<h2>Inzet per rol</h2>" + roleTable() +
+      mdToHtml(markdown) +
+      "<h2>Onderbouwende cijfers</h2>" +
+      "<h3>Projecten</h3>" + projTable() +
+      "<h3>Inzet per rol</h3>" + roleTable() +
       "<div class='chart'><div class='ct'>Begroot vs. werkelijk per rol</div>" + svgHtml(chartRol) + "</div>" +
-      "<h2>Personeelsbezetting</h2>" + mdToHtml(n.bezetting_analyse) + planTable() +
-      "<h2>Risico's</h2><ul>" + risks + "</ul>" +
-      "<h2>Aanbevelingen</h2><ul>" + recs + "</ul>" +
-      "<h2>Conclusie</h2>" + mdToHtml(n.conclusie) +
+      planTable() +
       "<div class='footer'>HVP-TSB · " + esc(f.periodLabel) + " · " + esc(genStamp) + "</div>" +
       "</body></html>";
   }
