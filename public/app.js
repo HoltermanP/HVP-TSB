@@ -1317,11 +1317,6 @@
     wrap.appendChild(reportCard("Begroot vs. werkelijk per rol",
       twoSeriesHBar(rolesSorted.map(function (r) { return { label: r.name, a: r.begrootUren, b: r.werkelijkUren }; }),
         { seriesA: { name: "Begroot", color: "#94a8c4" }, seriesB: { name: "Werkelijk", color: "#2e8b57" }, fmt: uStr })));
-    // tabellen (zelfde HTML als in de download)
-    var tables = el("div", { class: "card" });
-    tables.innerHTML = "<div style='font-weight:600;margin-bottom:10px'>Onderbouwende cijfers</div><h3>Projecten</h3>" + projTableHtml(f) +
-      "<h3>Inzet per rol</h3>" + roleTableHtml(f) + planTableHtml(f);
-    wrap.appendChild(tables);
     return wrap;
   }
   function downloadFile(name, content, mime) {
@@ -1415,12 +1410,16 @@
                 : kpiHtml("Resterend begroot", uStr(p.begrootUren - p.werkelijkUren), "nog te besteden"));
 
     var genStamp = new Date().toLocaleString("nl-NL");
-    var css = "*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c2733;margin:0 auto;padding:32px;max-width:980px;line-height:1.5}" +
-      "h1{font-size:26px;color:#1f4e79;margin:0 0 4px}h2{font-size:18px;color:#1f4e79;border-bottom:2px solid #d9e1f2;padding-bottom:4px;margin:28px 0 12px}h3{font-size:15px;margin:16px 0 4px}h4{font-size:13px;margin:12px 0 4px}" +
-      ".sub{color:#6b7785;font-size:13px;margin-bottom:18px}p{margin:0 0 10px}ul{margin:0 0 10px 18px}" +
+    var css = "*{box-sizing:border-box}body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#243140;margin:0 auto;padding:36px;max-width:900px;line-height:1.65}" +
+      "h1{font-size:27px;color:#1f4e79;margin:0 0 4px}" +
+      "h2{font-size:19px;color:#1f4e79;margin:30px 0 12px;padding:0 0 6px 12px;border-left:4px solid #1f4e79;border-bottom:1px solid #d8dde3;line-height:1.2}" +
+      "h3{font-size:15.5px;color:#1c2733;margin:20px 0 6px}h4{font-size:13px;color:#6b7785;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 4px}" +
+      ".sub{color:#6b7785;font-size:13px;margin-bottom:18px}p{margin:0 0 12px;font-size:14.5px}" +
+      "ul{margin:0 0 14px 2px;padding:0;list-style:none}li{position:relative;margin:6px 0;padding-left:18px;font-size:14.5px}li:before{content:'';position:absolute;left:2px;top:9px;width:6px;height:6px;border-radius:50%;background:#1f4e79}" +
+      "strong{color:#1f4e79}code{background:#eef1f5;border-radius:4px;padding:1px 5px;font-size:12px}" +
       ".kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:16px 0}.kpi{border:1px solid #d8dde3;border-radius:10px;padding:12px}.kpi .t{color:#6b7785;font-size:12px}.kpi .v{font-size:20px;font-weight:700;color:#1f4e79}.kpi .s{color:#6b7785;font-size:11px}" +
       ".charts{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}.chart{border:1px solid #eee;border-radius:8px;padding:10px}.chart .ct{font-weight:600;margin-bottom:8px;font-size:14px}" +
-      "table.rep{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 16px}table.rep th,table.rep td{border:1px solid #e6eaef;padding:5px 8px;text-align:left}table.rep th{background:#f0f3f7}td.r,th.r{text-align:right}" +
+      "table.rep{border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 16px}table.rep th,table.rep td{border:1px solid #e6eaef;padding:6px 9px;text-align:left}table.rep th{background:#f0f3f7}td.r,th.r{text-align:right}" +
       ".muted{color:#6b7785}.footer{margin-top:30px;color:#6b7785;font-size:11px;border-top:1px solid #e6eaef;padding-top:8px}" +
       "@media print{body{padding:0}h2{page-break-after:avoid}table.rep,.chart{page-break-inside:avoid}}";
 
@@ -1433,12 +1432,8 @@
         "<div class='chart'><div class='ct'>Verdeling per fase</div>" + svgHtml(chartFase) + "</div>" +
       "</div>" +
       "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk geboekte uren — per project</div>" + svgHtml(chartBvw) + "</div>" +
+      "<div class='chart' style='margin-top:18px'><div class='ct'>Begroot vs. werkelijk per rol</div>" + svgHtml(chartRol) + "</div>" +
       mdToHtml(markdown) +
-      "<h2>Onderbouwende cijfers</h2>" +
-      "<h3>Projecten</h3>" + projTableHtml(f) +
-      "<h3>Inzet per rol</h3>" + roleTableHtml(f) +
-      "<div class='chart'><div class='ct'>Begroot vs. werkelijk per rol</div>" + svgHtml(chartRol) + "</div>" +
-      planTableHtml(f) +
       "<div class='footer'>HVP-TSB · " + esc(f.periodLabel) + " · " + esc(genStamp) + "</div>" +
       "</body></html>";
   }

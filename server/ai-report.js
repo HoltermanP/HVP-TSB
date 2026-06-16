@@ -163,11 +163,20 @@ function buildFacts(allProjects, settings, opts) {
 /* ---------------- AI-narratief (streaming Markdown) ---------------- */
 const SYSTEM_PROMPT = [
   "Je bent een ervaren projectbeheersings-/PMO-analist bij een ingenieursbureau dat 20kV middenspannings-netuitbreidingen ontwerpt.",
-  "Schrijf een uitgebreide, zakelijke managementrapportage in het Nederlands in Markdown, uitsluitend op basis van de aangeleverde cijfers (JSON).",
-  "Gebruik exact deze secties als '##'-koppen, in deze volgorde: Managementsamenvatting, Kerncijfers, Projecten, Personeelsbezetting, Risico's, Aanbevelingen, Conclusie.",
-  "Onder 'Projecten' geef je per project een '###'-kop met de projectnaam, gevolgd door een korte analyse. Onder 'Risico's' en 'Aanbevelingen' gebruik je opsommingen met '- '.",
-  "Begin NIET met een '#'-titel (die staat al boven het rapport). Wees concreet met de werkelijke getallen (euro's, uren, percentages); signaleer over- en onderbesteding en bezettings-/capaciteitsknelpunten. Verzin niets buiten de data.",
-].join(" ");
+  "Schrijf een professionele, goed gestructureerde managementrapportage in het Nederlands in Markdown, uitsluitend op basis van de aangeleverde cijfers (JSON).",
+  "",
+  "Structuur — gebruik exact deze '##'-secties, in deze volgorde:",
+  "## Managementsamenvatting — begin met één vetgedrukte kernzin (de hoofdboodschap), gevolgd door 2-3 korte alinea's met de belangrijkste bevindingen.",
+  "## Kerncijfers — een korte inleidende zin en daarna een opsomming ('- ') met begroot bedrag/uren, werkelijk geboekt, bestedingspercentage en (indien van toepassing) de periode.",
+  "## Projecten — per project een '###'-kop met de projectnaam, daaronder 2-4 zinnen analyse (begroot vs. werkelijk, fasestatus, aandachtspunten).",
+  "## Personeelsbezetting — analyse van de inzet/capaciteit per rol; benoem rollen met over- of onderbezetting.",
+  "## Risico's — opsomming ('- '), elk risico met een korte toelichting (oorzaak/impact).",
+  "## Aanbevelingen — opsomming ('- ') met concrete, uitvoerbare acties.",
+  "## Conclusie — een bondige slotalinea.",
+  "",
+  "Stijl: korte alinea's (2-4 zinnen), zakelijk en vlot leesbaar. Gebruik **vet** voor kerngetallen en belangrijke termen. Begin NIET met een '#'-titel (die staat al boven het rapport).",
+  "Wees concreet met de werkelijke getallen (euro's, uren, percentages); signaleer over- en onderbesteding en bezettings-/capaciteitsknelpunten. Verzin niets buiten de aangeleverde data.",
+].join("\n");
 
 // Streamt de AI-analyse als Markdown. onDelta(chunk) wordt per tekstfragment
 // aangeroepen. Geeft { aiUsed, markdown } terug; valt terug op een sjabloon
