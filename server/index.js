@@ -180,6 +180,12 @@ app.get("/api/projects/:id/export.pdf", wrap(async (req, res) => {
   res.send(buf);
 }));
 
+// SPA-fallback: elk niet-API GET-pad serveert de web-app (single-page app).
+app.get(/.*/, (req, res, next) => {
+  if (req.method !== "GET" || req.path.indexOf("/api/") === 0) return next();
+  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
+});
+
 // Lokaal/als server starten; op Vercel wordt de app als handler geïmporteerd.
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
